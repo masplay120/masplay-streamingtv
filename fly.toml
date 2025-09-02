@@ -1,5 +1,5 @@
 # fly.toml app configuration file generated for radio-proxy
-app = "multi-radio-proxy"
+app = "multi-tv-proxy"
 primary_region = "scl"
 
 [build]
