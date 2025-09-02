@@ -1,21 +1,19 @@
-# Imagen base
 FROM node:20-bullseye-slim
 
-# Crear y establecer directorio de trabajo
 WORKDIR /app
 
-# Copiar package.json y package-lock.json (si existe)
+# Copiar package.json y package-lock.json
 COPY package*.json ./
 
-# Instalar dependencias en modo producción
+# Instalar dependencias
 RUN npm install --production
 
 # Copiar el resto del código
 COPY . .
 
-# Definir variable de entorno de puerto (Fly.io la usa automáticamente)
+# Definir puerto
 ENV PORT=8080
 EXPOSE $PORT
 
-# Comando para iniciar la aplicación
+# Iniciar la aplicación
 CMD ["node", "server.js"]
