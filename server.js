@@ -39,7 +39,7 @@ async function isLive(url) {
 }
 
 // 🔹 Endpoint para servir el playlist.m3u8 con rutas .ts reescritas
-app.get("/proxy/:channel/playlist.m3u8", async (req, res) => {
+app.get(""/prox/:channel/playlist.m3u8", async (req, res) => {
   const { channel } = req.params;
   const config = channels[channel];
   if (!config) return res.status(404).send("Canal no encontrado");
