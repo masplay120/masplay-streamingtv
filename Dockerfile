@@ -1,19 +1,21 @@
-FROM node:18-alpine
+# Imagen base
+FROM node:20-bullseye-slim
 
-# Crear carpeta de la app
-WORKDIR /usr/src/app
+# Crear y establecer directorio de trabajo
+WORKDIR /app
 
-# Copiar dependencias
+# Copiar package.json y package-lock.json (si existe)
 COPY package*.json ./
 
-# Instalar dependencias
-RUN npm install --only=production
+# Instalar dependencias en modo producción
+RUN npm install --production
 
 # Copiar el resto del código
 COPY . .
 
-# Exponer el puerto (Fly usará el 8080 por defecto)
-EXPOSE 8080
+# Definir variable de entorno de puerto (Fly.io la usa automáticamente)
+ENV PORT=8080
+EXPOSE $PORT
 
-# Ejecutar la app
-CMD ["npm", "start"]
+# Comando para iniciar la aplicación
+CMD ["node", "server.js"]
