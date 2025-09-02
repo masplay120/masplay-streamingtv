@@ -21,41 +21,33 @@ app.use((req, res, next) => {
 });
 
 // Proxy playlist.m3u8
-app.get("/proxy/:channel/playlist.m3u8", async (req, res) => {
+app.use("/proxy/:channel/:segment", async (req, res, next) => {
   const { channel } = req.params;
   const config = channels[channel];
   if (!config) return res.status(404).send("Canal no encontrado");
 
-  let playlistUrl = config.cloud;
+  let baseUrl = config.cloud.substring(0, config.cloud.lastIndexOf("/") + 1);
+
   try {
     const headRes = await fetch(config.live, { method: "HEAD" });
-    if (headRes.ok) playlistUrl = config.live;
+    if (headRes.ok) {
+      baseUrl = config.live.substring(0, config.live.lastIndexOf("/") + 1);
+    }
   } catch {}
 
-  const r = await fetch(playlistUrl);
-  let text = await r.text();
-  text = text.replace(/(.*?\.ts)/g, `/proxy/${channel}/$1`);
-
-  res.header("Content-Type", "application/vnd.apple.mpegurl");
-  res.send(text);
-});
-
-// Proxy segmentos .ts
-Object.keys(channels).forEach((channel) => {
-  const config = channels[channel];
-  const baseUrl = config.cloud.substring(0, config.cloud.lastIndexOf("/") + 1);
-
-  app.use(`/proxy/${channel}/`, createProxyMiddleware({
+  createProxyMiddleware({
     target: baseUrl,
     changeOrigin: true,
-    pathRewrite: { [`^/proxy/${channel}/`]: "" },
+    pathRewrite: (path) => path.replace(`/proxy/${channel}/`, ""),
+    selfHandleResponse: false,
     onProxyRes: (proxyRes, req, res) => {
       res.setHeader("Access-Control-Allow-Origin", "*");
       res.setHeader("Access-Control-Allow-Methods", "GET,HEAD,OPTIONS");
       res.setHeader("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Range");
       res.setHeader("Accept-Ranges", "bytes");
     }
-  }));
+  })(req, res, next);
 });
+
 
 app.listen(PORT, () => console.log(`✅ Proxy HLS corriendo en http://localhost:${PORT}`));
