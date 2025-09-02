@@ -1,8 +1,0 @@
-app = "stream-proxy"
-
-[build]
-  dockerfile = "Dockerfile"
-
-[http_service]
-  internal_port = 8080
-  force_https = true
