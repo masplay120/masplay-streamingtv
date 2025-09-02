@@ -1,9 +1,10 @@
 import express from "express";
-import { createProxyMiddleware } from "http-proxy-middleware";
 import fetch from "node-fetch";
+import { createProxyMiddleware } from "http-proxy-middleware";
 
 const app = express();
 
+// 🔹 Configura tus canales aquí
 const channels = {
   mixtv: {
     live: "https://live20.bozztv.com/giatv/giatv-estacionmixtv/estacionmixtv/playlist.m3u8",
@@ -19,7 +20,7 @@ const channels = {
   }
 };
 
-
+// 🔹 CORS
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Methods", "GET,HEAD,OPTIONS");
@@ -27,6 +28,7 @@ app.use((req, res, next) => {
   next();
 });
 
+// 🔹 Verifica si el canal en vivo está disponible
 async function isLive(url) {
   try {
     const res = await fetch(url, { method: "HEAD", timeout: 3000 });
@@ -36,10 +38,29 @@ async function isLive(url) {
   }
 }
 
-app.use("/proxy/:channel", async (req, res, next) => {
+// 🔹 Endpoint para servir el playlist.m3u8 con rutas .ts reescritas
+app.get("/proxy/:channel/playlist.m3u8", async (req, res) => {
   const { channel } = req.params;
   const config = channels[channel];
+  if (!config) return res.status(404).send("Canal no encontrado");
 
+  const liveAvailable = await isLive(config.live);
+  const playlistUrl = liveAvailable ? config.live : config.cloud;
+
+  const r = await fetch(playlistUrl);
+  let text = await r.text();
+
+  // Reescribir rutas de segmentos .ts para que pasen por el proxy
+  text = text.replace(/(.*?\.ts)/g, `/proxy/${channel}/$1`);
+
+  res.header("Content-Type", "application/vnd.apple.mpegurl");
+  res.send(text);
+});
+
+// 🔹 Proxy para los segmentos .ts
+app.use("/proxy/:channel/:segment", async (req, res, next) => {
+  const { channel } = req.params;
+  const config = channels[channel];
   if (!config) return res.status(404).send("Canal no encontrado");
 
   const liveAvailable = await isLive(config.live);
@@ -48,15 +69,11 @@ app.use("/proxy/:channel", async (req, res, next) => {
   const urlObj = new URL(baseTarget);
   const baseUrl = `${urlObj.protocol}//${urlObj.host}${urlObj.pathname.substring(0, urlObj.pathname.lastIndexOf('/') + 1)}`;
 
-  req.proxyTarget = baseTarget;
-  req.proxyBase = baseUrl;
-  next();
-}, (req, res, next) => {
   createProxyMiddleware({
-    target: req.proxyBase,
+    target: baseUrl,
     changeOrigin: true,
     selfHandleResponse: false,
-    pathRewrite: (path, req) => path.replace(/^\/proxy\/[^/]+/, ""),
+    pathRewrite: (path) => path.replace(`/proxy/${channel}/`, ""),
     onProxyRes: (proxyRes, req, res) => {
       res.setHeader("Access-Control-Allow-Origin", "*");
       res.setHeader("Access-Control-Allow-Methods", "GET,HEAD,OPTIONS");
