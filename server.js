@@ -8,8 +8,17 @@ const channels = {
   mixtv: {
     live: "https://live20.bozztv.com/giatv/giatv-estacionmixtv/estacionmixtv/playlist.m3u8",
     cloud: "https://live20.bozztv.com/giatvplayout7/giatv-208566/tracks-v1a1/mono.ts.m3u8"
+  },
+  otrocanal: {
+    live: "https://example.com/otrocanal/live.m3u8",
+    cloud: "https://example.com/otrocanal/vod.m3u8"
+  },
+  tercercanal: {
+    live: "https://example.com/tercercanal/live.m3u8",
+    cloud: "https://example.com/tercercanal/vod.m3u8"
   }
 };
+
 
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
