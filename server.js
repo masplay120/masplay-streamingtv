@@ -4,7 +4,7 @@ import { createProxyMiddleware } from "http-proxy-middleware";
 
 const app = express();
 
-// 🔹 Configura tus canales aquí
+// 🔹 Configura tus canales
 const channels = {
   mixtv: {
     live: "https://live20.bozztv.com/giatv/giatv-estacionmixtv/estacionmixtv/playlist.m3u8",
@@ -38,8 +38,8 @@ async function isLive(url) {
   }
 }
 
-// 🔹 Endpoint para servir el playlist.m3u8 con rutas .ts reescritas
-app.get(""/prox/:channel/playlist.m3u8", async (req, res) => {
+// 🔹 Endpoint para playlist.m3u8
+app.get("/proxy/:channel/playlist.m3u8", async (req, res) => {
   const { channel } = req.params;
   const config = channels[channel];
   if (!config) return res.status(404).send("Canal no encontrado");
@@ -50,14 +50,14 @@ app.get(""/prox/:channel/playlist.m3u8", async (req, res) => {
   const r = await fetch(playlistUrl);
   let text = await r.text();
 
-  // Reescribir rutas de segmentos .ts para que pasen por el proxy
+  // Reescribir rutas de segmentos .ts
   text = text.replace(/(.*?\.ts)/g, `/proxy/${channel}/$1`);
 
   res.header("Content-Type", "application/vnd.apple.mpegurl");
   res.send(text);
 });
 
-// 🔹 Proxy para los segmentos .ts
+// 🔹 Proxy para segmentos .ts
 app.use("/proxy/:channel/:segment", async (req, res, next) => {
   const { channel } = req.params;
   const config = channels[channel];
