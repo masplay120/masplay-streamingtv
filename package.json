@@ -1,13 +1,14 @@
 {
-  "name": "tv-proxy",
+  "name": "stream-proxy",
   "version": "1.0.0",
-  "description": "Proxy de múltiples tv con Express en Fly.io",
-  "main": "index.js",
+  "main": "server.js",
+  "type": "module",
   "scripts": {
-    "start": "node index.js"
+    "start": "node server.js"
   },
   "dependencies": {
-    "express": "^4.18.2",
-    "request": "^2.88.2"
+    "express": "^4.19.2",
+    "http-proxy-middleware": "^3.0.0",
+    "node-fetch": "^3.3.2"
   }
 }
