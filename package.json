@@ -1,7 +1,7 @@
 {
-  "name": "radio-proxy",
+  "name": "tv-proxy",
   "version": "1.0.0",
-  "description": "Proxy de múltiples radios con Express en Fly.io",
+  "description": "Proxy de múltiples tv con Express en Fly.io",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
