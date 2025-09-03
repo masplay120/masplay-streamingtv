@@ -1,5 +1,5 @@
 import events from "events";
-events.EventEmitter.defaultMaxListeners = 1000; // o el número que quieras
+events.EventEmitter.defaultMaxListeners = 1000; // Permitir muchos listeners
 import express from "express";
 import fetch from "node-fetch";
 import { createProxyMiddleware } from "http-proxy-middleware";
@@ -7,6 +7,7 @@ import { createProxyMiddleware } from "http-proxy-middleware";
 const app = express();
 const PORT = process.env.PORT || 8080;
 
+// ------------------- CONFIGURACIÓN -------------------
 const channels = {
   mixtv: {
     live: "https://live20.bozztv.com/giatv/giatv-estacionmixtv/estacionmixtv/chunks.m3u8",
@@ -14,17 +15,19 @@ const channels = {
   }
 };
 
-const channelStatus = {};
-const PLAYLIST_CACHE = {};
-const CHECK_INTERVAL = 400;
+const channelStatus = {};       // Estado si está live o no
+const PLAYLIST_CACHE = {};      // Caché de la playlist
+const BASEURL_CACHE = {};       // Caché del baseUrl de los segmentos
+const CHECK_INTERVAL = 2000;    // Cada 2 segundos chequeamos el canal
 
-// Inicializar estado
+// ------------------- INICIALIZAR -------------------
 for (const ch in channels) {
   channelStatus[ch] = { live: false };
   PLAYLIST_CACHE[ch] = "#EXTM3U\n";
+  BASEURL_CACHE[ch] = channels[ch].cloud.replace(/[^/]+$/, ""); // inicial cloud
 }
 
-// Checker en background
+// ------------------- FUNCIONES -------------------
 async function checkLive(channel, url) {
   try {
     const resp = await fetch(url, { method: "HEAD", timeout: 3000 });
@@ -34,11 +37,12 @@ async function checkLive(channel, url) {
   }
 }
 
+// ------------------- CHEQUEO EN INTERVALO -------------------
 for (const ch in channels) {
   setInterval(() => checkLive(ch, channels[ch].live), CHECK_INTERVAL);
 }
 
-// Middleware CORS global
+// ------------------- CORS GLOBAL -------------------
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Methods", "GET,HEAD,OPTIONS");
@@ -46,34 +50,41 @@ app.use((req, res, next) => {
   next();
 });
 
-// Playlist proxy
+// ------------------- PLAYLIST PROXY -------------------
 app.get("/proxy/:channel/playlist.m3u8", async (req, res) => {
   const { channel } = req.params;
   const config = channels[channel];
   if (!config) return res.status(404).send("Canal no encontrado");
 
-  const playlistUrl = channelStatus[channel].live ? config.live : config.cloud;
+  // Decidir si usar live o cloud
+  const isLive = channelStatus[channel].live;
+  const playlistUrl = isLive ? config.live : config.cloud;
 
   try {
     const response = await fetch(playlistUrl);
     let text = await response.text();
 
+    // Guardar baseUrl congelado para los segmentos
+    BASEURL_CACHE[channel] = playlistUrl.replace(/[^/]+$/, "");
+
+    // Reescribir rutas de los segmentos
     text = text.replace(/(.*?\.ts)/g, `/proxy/${channel}/$1`);
     PLAYLIST_CACHE[channel] = text;
 
     res.header("Content-Type", "application/vnd.apple.mpegurl");
     res.send(text);
   } catch {
+    // Si falla, devolvemos la última playlist en caché
     res.header("Content-Type", "application/vnd.apple.mpegurl");
     res.send(PLAYLIST_CACHE[channel]);
   }
 });
 
-// Proxies de segmentos (uno por canal, creados solo una vez)
+// ------------------- PROXY DE SEGMENTOS -------------------
 for (const channel in channels) {
   app.use(`/proxy/${channel}/`, (req, res, next) => {
-    const config = channels[channel];
-    const baseUrl = (channelStatus[channel].live ? config.live : config.cloud).replace(/[^/]+$/, "");
+    const baseUrl = BASEURL_CACHE[channel]; // usar URL congelada
+    if (!baseUrl) return res.status(503).send("Playlist no disponible aún");
 
     createProxyMiddleware({
       target: baseUrl,
@@ -89,4 +100,5 @@ for (const channel in channels) {
   });
 }
 
+// ------------------- INICIAR SERVIDOR -------------------
 app.listen(PORT, () => console.log(`✅ Proxy estable en http://localhost:${PORT}`));
