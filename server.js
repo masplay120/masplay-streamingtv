@@ -66,8 +66,8 @@ app.get("/proxy/:channel/playlist.m3u8", async (req, res) => {
 });
 
 // Proxy dinámico para segmentos
-app.get("/proxy/:channel/:segment", async (req, res) => {
-  const { channel, segment } = req.params;
+app.use("/proxy/:channel/", async (req, res) => {
+  const { channel } = req.params;
   const config = channels[channel];
   if (!config) return res.status(404).send("Canal no encontrado");
 
