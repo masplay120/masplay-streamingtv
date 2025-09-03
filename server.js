@@ -12,21 +12,27 @@ const channels = {
   }
 };
 
-// Estado de fallos por canal
+// Estado de cada canal
 const channelStatus = {};
-const FAIL_LIMIT = 0; // nº de intentos fallidos antes de cambiar a cloud
+const PLAYLIST_CACHE = {}; // para guardar últimas playlists
 
-// Verificar si live responde
-async function isLive(url) {
+// --- Checker en segundo plano ---
+async function checkLive(channel, url) {
   try {
     const resp = await fetch(url, { method: "HEAD", timeout: 3000 });
-    return resp.ok;
+    channelStatus[channel].live = resp.ok;
   } catch {
-    return false;
+    channelStatus[channel].live = false;
   }
 }
 
-// CORS
+for (const ch in channels) {
+  channelStatus[ch] = { live: false };
+  // cada 5s verificamos en background
+  setInterval(() => checkLive(ch, channels[ch].live), 5000);
+}
+
+// --- Middleware CORS ---
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Methods", "GET,HEAD,OPTIONS");
@@ -34,64 +40,49 @@ app.use((req, res, next) => {
   next();
 });
 
-// Playlist con fallback inteligente
+// --- Playlist con fallback inmediato ---
 app.get("/proxy/:channel/playlist.m3u8", async (req, res) => {
   const { channel } = req.params;
   const config = channels[channel];
   if (!config) return res.status(404).send("Canal no encontrado");
 
-  if (!channelStatus[channel]) channelStatus[channel] = { fails: 0 };
-
-  let useLive = true;
-  const liveAvailable = await isLive(config.live);
-
-  if (liveAvailable) {
-    channelStatus[channel].fails = 0; // reset
-  } else {
-    channelStatus[channel].fails++;
-    if (channelStatus[channel].fails >= FAIL_LIMIT) {
-      useLive = false; // recién cambia después de varios fallos
-    }
-  }
-
+  const useLive = channelStatus[channel]?.live;
   const playlistUrl = useLive ? config.live : config.cloud;
-  const response = await fetch(playlistUrl);
-  let text = await response.text();
 
-  // Reescribir rutas
-  text = text.replace(/(.*?\.ts)/g, `/proxy/${channel}/$1`);
+  try {
+    const response = await fetch(playlistUrl);
+    let text = await response.text();
 
-  res.header("Content-Type", "application/vnd.apple.mpegurl");
-  res.send(text);
+    // Reescribir segmentos al proxy
+    text = text.replace(/(.*?\.ts)/g, `/proxy/${channel}/$1`);
+
+    PLAYLIST_CACHE[channel] = text; // cachear
+
+    res.header("Content-Type", "application/vnd.apple.mpegurl");
+    res.send(text);
+  } catch (err) {
+    // si falla, devolvemos la última playlist en caché
+    if (PLAYLIST_CACHE[channel]) {
+      res.header("Content-Type", "application/vnd.apple.mpegurl");
+      return res.send(PLAYLIST_CACHE[channel]);
+    }
+    res.status(500).send("No se pudo obtener playlist");
+  }
 });
 
-// Proxy dinámico para segmentos
-app.use("/proxy/:channel/", async (req, res, next) => {
+// --- Proxy dinámico para segmentos ---
+app.use("/proxy/:channel/", (req, res, next) => {
   const { channel } = req.params;
   const config = channels[channel];
   if (!config) return res.status(404).send("Canal no encontrado");
 
-  if (!channelStatus[channel]) channelStatus[channel] = { fails: 0 };
-
-  const liveAvailable = await isLive(config.live);
-  let useLive = true;
-
-  if (liveAvailable) {
-    channelStatus[channel].fails = 0;
-  } else {
-    channelStatus[channel].fails++;
-    if (channelStatus[channel].fails >= FAIL_LIMIT) {
-      useLive = false;
-    }
-  }
-
+  const useLive = channelStatus[channel]?.live;
   const baseUrl = (useLive ? config.live : config.cloud).replace(/[^/]+$/, "");
 
   createProxyMiddleware({
     target: baseUrl,
     changeOrigin: true,
     pathRewrite: (path) => path.replace(`/proxy/${channel}/`, ""),
-    selfHandleResponse: false,
     onProxyRes: (proxyRes, req, res) => {
       res.setHeader("Access-Control-Allow-Origin", "*");
       res.setHeader("Access-Control-Allow-Methods", "GET,HEAD,OPTIONS");
@@ -101,4 +92,4 @@ app.use("/proxy/:channel/", async (req, res, next) => {
   })(req, res, next);
 });
 
-app.listen(PORT, () => console.log(`✅ Proxy HLS con buffer corriendo en http://localhost:${PORT}`));
+app.listen(PORT, () => console.log(`✅ Proxy HLS estable en http://localhost:${PORT}`));
