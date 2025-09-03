@@ -14,9 +14,16 @@ const channels = {
 
 // Estado de cada canal
 const channelStatus = {};
-const PLAYLIST_CACHE = {}; // para guardar últimas playlists
+const PLAYLIST_CACHE = {};
+const CHECK_INTERVAL = 5000;
 
-// --- Checker en segundo plano ---
+// Inicializar estado
+for (const ch in channels) {
+  channelStatus[ch] = { live: false, lastCheck: 0 };
+  PLAYLIST_CACHE[ch] = "#EXTM3U\n"; // valor inicial
+}
+
+// --- Checker en background ---
 async function checkLive(channel, url) {
   try {
     const resp = await fetch(url, { method: "HEAD", timeout: 3000 });
@@ -24,12 +31,12 @@ async function checkLive(channel, url) {
   } catch {
     channelStatus[channel].live = false;
   }
+  channelStatus[channel].lastCheck = Date.now();
 }
 
+// Lanzar checker cada X seg
 for (const ch in channels) {
-  channelStatus[ch] = { live: false };
-  // cada 5s verificamos en background
-  setInterval(() => checkLive(ch, channels[ch].live), 5000);
+  setInterval(() => checkLive(ch, channels[ch].live), CHECK_INTERVAL);
 }
 
 // --- Middleware CORS ---
@@ -40,7 +47,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// --- Playlist con fallback inmediato ---
+// --- Playlist proxyado con fallback ---
 app.get("/proxy/:channel/playlist.m3u8", async (req, res) => {
   const { channel } = req.params;
   const config = channels[channel];
@@ -50,23 +57,21 @@ app.get("/proxy/:channel/playlist.m3u8", async (req, res) => {
   const playlistUrl = useLive ? config.live : config.cloud;
 
   try {
-    const response = await fetch(playlistUrl);
+    const response = await fetch(playlistUrl, { timeout: 5000 });
     let text = await response.text();
 
-    // Reescribir segmentos al proxy
+    // Reescribir segmentos hacia proxy
     text = text.replace(/(.*?\.ts)/g, `/proxy/${channel}/$1`);
 
-    PLAYLIST_CACHE[channel] = text; // cachear
+    // Guardar en cache
+    PLAYLIST_CACHE[channel] = text;
 
     res.header("Content-Type", "application/vnd.apple.mpegurl");
     res.send(text);
   } catch (err) {
-    // si falla, devolvemos la última playlist en caché
-    if (PLAYLIST_CACHE[channel]) {
-      res.header("Content-Type", "application/vnd.apple.mpegurl");
-      return res.send(PLAYLIST_CACHE[channel]);
-    }
-    res.status(500).send("No se pudo obtener playlist");
+    // si falla, devolvemos cache estable
+    res.header("Content-Type", "application/vnd.apple.mpegurl");
+    res.send(PLAYLIST_CACHE[channel]);
   }
 });
 
@@ -92,4 +97,4 @@ app.use("/proxy/:channel/", (req, res, next) => {
   })(req, res, next);
 });
 
-app.listen(PORT, () => console.log(`✅ Proxy HLS estable en http://localhost:${PORT}`));
+app.listen(PORT, () => console.log(`✅ Proxy HLS robusto en http://localhost:${PORT}`));
