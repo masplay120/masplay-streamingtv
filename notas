@@ -3,8 +3,6 @@ const channels = {
     live: "https://live20.bozztv.com/giatv/giatv-estacionmixtv/estacionmixtv/chunks.m3u8",
     cloud: "https://live20.bozztv.com/giatvplayout7/giatv-208566/tracks-v1a1/mono.ts.m3u8"
   }
-  
-  /*
   ,canal2: {
     live: "https://ejemplo.com/canal2/live/playlist.m3u8",
     cloud: "https://ejemplo.com/canal2/vod/fallback.m3u8"
@@ -13,5 +11,5 @@ const channels = {
     live: "https://ejemplo.com/canal3/live/playlist.m3u8",
     cloud: "https://ejemplo.com/canal3/vod/fallback.m3u8"
   }
-  */
+
 };
