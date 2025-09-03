@@ -66,39 +66,37 @@ app.get("/proxy/:channel/playlist.m3u8", async (req, res) => {
 });
 
 // Proxy dinámico para segmentos
-app.use("/proxy/:channel/", async (req, res, next) => {
-  const { channel } = req.params;
+app.get("/proxy/:channel/:segment", async (req, res) => {
+  const { channel, segment } = req.params;
   const config = channels[channel];
   if (!config) return res.status(404).send("Canal no encontrado");
 
-  if (!channelStatus[channel]) channelStatus[channel] = { fails: 0 };
-
-  const liveAvailable = await isLive(config.live);
-  let useLive = true;
-
-  if (liveAvailable) {
-    channelStatus[channel].fails = 0;
-  } else {
-    channelStatus[channel].fails++;
-    if (channelStatus[channel].fails >= FAIL_LIMIT) {
-      useLive = false;
+  // Revisar qué usar (live o cloud) sin matar el endpoint
+  let baseUrl = config.cloud.substring(0, config.cloud.lastIndexOf("/") + 1);
+  try {
+    const liveResp = await fetch(config.live, { method: "HEAD", timeout: 2000 });
+    if (liveResp.ok) {
+      baseUrl = config.live.substring(0, config.live.lastIndexOf("/") + 1);
     }
+  } catch {}
+
+  const segmentUrl = baseUrl + segment;
+
+  try {
+    const response = await fetch(segmentUrl);
+    if (!response.ok) return res.status(502).send("Error en el segmento");
+
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET,HEAD,OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Range");
+    res.setHeader("Accept-Ranges", "bytes");
+
+    response.body.pipe(res); // 🔑 nunca corta, solo cambia la fuente
+  } catch (err) {
+    res.status(500).send("Error obteniendo segmento");
   }
-
-  const baseUrl = (useLive ? config.live : config.cloud).replace(/[^/]+$/, "");
-
-  createProxyMiddleware({
-    target: baseUrl,
-    changeOrigin: true,
-    pathRewrite: (path) => path.replace(`/proxy/${channel}/`, ""),
-    selfHandleResponse: false,
-    onProxyRes: (proxyRes, req, res) => {
-      res.setHeader("Access-Control-Allow-Origin", "*");
-      res.setHeader("Access-Control-Allow-Methods", "GET,HEAD,OPTIONS");
-      res.setHeader("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Range");
-      res.setHeader("Accept-Ranges", "bytes");
-    }
-  })(req, res, next);
 });
+
+
 
 app.listen(PORT, () => console.log(`✅ Proxy HLS con buffer corriendo en http://localhost:${PORT}`));
