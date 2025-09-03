@@ -51,35 +51,28 @@ app.use((req, res, next) => {
 });
 
 // ------------------- PLAYLIST PROXY -------------------
+
 app.get("/proxy/:channel/playlist.m3u8", async (req, res) => {
   const { channel } = req.params;
   const config = channels[channel];
   if (!config) return res.status(404).send("Canal no encontrado");
 
-  // Decidir si usar live o cloud
   const isLive = channelStatus[channel].live;
-  const playlistUrl = isLive ? config.live : config.cloud;
+  const playlistUrl = isLive ? config.live : config.cloud; // usar siempre actual
 
   try {
     const response = await fetch(playlistUrl);
     let text = await response.text();
 
-    // Guardar baseUrl congelado para los segmentos
-    BASEURL_CACHE[channel] = playlistUrl.replace(/[^/]+$/, "");
-
-    // Reescribir rutas de los segmentos
+    // Reescribir segmentos dinámicamente
     text = text.replace(/(.*?\.ts)/g, `/proxy/${channel}/$1`);
-    PLAYLIST_CACHE[channel] = text;
-
     res.header("Content-Type", "application/vnd.apple.mpegurl");
     res.send(text);
   } catch {
-    // Si falla, devolvemos la última playlist en caché
     res.header("Content-Type", "application/vnd.apple.mpegurl");
-    res.send(PLAYLIST_CACHE[channel]);
+    res.send(PLAYLIST_CACHE[channel]); // fallback
   }
 });
-
 // ------------------- PROXY DE SEGMENTOS -------------------
 for (const channel in channels) {
   app.use(`/proxy/${channel}/`, (req, res, next) => {
