@@ -5,7 +5,6 @@ import { createProxyMiddleware } from "http-proxy-middleware";
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-// Canales configurados
 const channels = {
   mixtv: {
     live: "https://live20.bozztv.com/giatv/giatv-estacionmixtv/estacionmixtv/chunks.m3u8",
@@ -21,49 +20,48 @@ app.use((req, res, next) => {
   next();
 });
 
+// Función para comprobar si live está disponible
+async function isLive(url) {
+  try {
+    const resp = await fetch(url, { method: "HEAD", timeout: 3000 });
+    return resp.ok;
+  } catch {
+    return false;
+  }
+}
+
 // Endpoint playlist.m3u8
 app.get("/proxy/:channel/playlist.m3u8", async (req, res) => {
   const { channel } = req.params;
   const config = channels[channel];
   if (!config) return res.status(404).send("Canal no encontrado");
 
-  let playlistUrl = config.cloud;
+  const liveAvailable = await isLive(config.live);
+  const playlistUrl = liveAvailable ? config.live : config.cloud;
 
-  try {
-    // Comprobar si live responde
-    const liveResp = await fetch(config.live, { method: "HEAD", timeout: 3000 });
-    if (liveResp.ok) playlistUrl = config.live;
-  } catch {}
-
-  // Traer contenido de playlist
   const response = await fetch(playlistUrl);
   let text = await response.text();
 
-  // Reescribir rutas de los segmentos
+  // Reescribir rutas de segmentos
   text = text.replace(/(.*?\.ts)/g, `/proxy/${channel}/$1`);
 
   res.header("Content-Type", "application/vnd.apple.mpegurl");
   res.send(text);
 });
 
-// Endpoint dinámico para segmentos .ts
-app.get("/proxy/:channel/:segment", async (req, res, next) => {
-  const { channel, segment } = req.params;
+// Proxy dinámico para todos los segmentos .ts
+app.use("/proxy/:channel/", async (req, res, next) => {
+  const { channel } = req.params;
   const config = channels[channel];
   if (!config) return res.status(404).send("Canal no encontrado");
 
-  let baseUrl = config.cloud.substring(0, config.cloud.lastIndexOf("/") + 1);
+  const liveAvailable = await isLive(config.live);
+  const baseUrl = (liveAvailable ? config.live : config.cloud).substring(0, (liveAvailable ? config.live : config.cloud).lastIndexOf("/") + 1);
 
-  try {
-    const liveResp = await fetch(config.live, { method: "HEAD", timeout: 3000 });
-    if (liveResp.ok) baseUrl = config.live.substring(0, config.live.lastIndexOf("/") + 1);
-  } catch {}
-
-  // Proxy del segmento
   createProxyMiddleware({
     target: baseUrl,
     changeOrigin: true,
-    pathRewrite: { [`^/proxy/${channel}/`]: "" },
+    pathRewrite: (path) => path.replace(`/proxy/${channel}/`, ""),
     selfHandleResponse: false,
     onProxyRes: (proxyRes, req, res) => {
       res.setHeader("Access-Control-Allow-Origin", "*");
