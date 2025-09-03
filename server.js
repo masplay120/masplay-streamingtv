@@ -14,7 +14,7 @@ const channels = {
 
 // Estado de fallos por canal
 const channelStatus = {};
-const FAIL_LIMIT = 1; // nº de intentos fallidos antes de cambiar a cloud
+const FAIL_LIMIT = 0; // nº de intentos fallidos antes de cambiar a cloud
 
 // Verificar si live responde
 async function isLive(url) {
