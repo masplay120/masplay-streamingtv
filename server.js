@@ -12,18 +12,17 @@ const channels = {
   }
 };
 
-// Estado de cada canal
 const channelStatus = {};
 const PLAYLIST_CACHE = {};
-const CHECK_INTERVAL = 1000;
+const CHECK_INTERVAL = 100;
 
 // Inicializar estado
 for (const ch in channels) {
-  channelStatus[ch] = { live: false, lastCheck: 0 };
-  PLAYLIST_CACHE[ch] = "#EXTM3U\n"; // valor inicial
+  channelStatus[ch] = { live: false };
+  PLAYLIST_CACHE[ch] = "#EXTM3U\n";
 }
 
-// --- Checker en background ---
+// Checker en background
 async function checkLive(channel, url) {
   try {
     const resp = await fetch(url, { method: "HEAD", timeout: 3000 });
@@ -31,15 +30,13 @@ async function checkLive(channel, url) {
   } catch {
     channelStatus[channel].live = false;
   }
-  channelStatus[channel].lastCheck = Date.now();
 }
 
-// Lanzar checker cada X seg
 for (const ch in channels) {
   setInterval(() => checkLive(ch, channels[ch].live), CHECK_INTERVAL);
 }
 
-// --- Middleware CORS ---
+// Middleware CORS global
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Methods", "GET,HEAD,OPTIONS");
@@ -47,54 +44,47 @@ app.use((req, res, next) => {
   next();
 });
 
-// --- Playlist proxyado con fallback ---
+// Playlist proxy
 app.get("/proxy/:channel/playlist.m3u8", async (req, res) => {
   const { channel } = req.params;
   const config = channels[channel];
   if (!config) return res.status(404).send("Canal no encontrado");
 
-  const useLive = channelStatus[channel]?.live;
-  const playlistUrl = useLive ? config.live : config.cloud;
+  const playlistUrl = channelStatus[channel].live ? config.live : config.cloud;
 
   try {
-    const response = await fetch(playlistUrl, { timeout: 5000 });
+    const response = await fetch(playlistUrl);
     let text = await response.text();
 
-    // Reescribir segmentos hacia proxy
     text = text.replace(/(.*?\.ts)/g, `/proxy/${channel}/$1`);
-
-    // Guardar en cache
     PLAYLIST_CACHE[channel] = text;
 
     res.header("Content-Type", "application/vnd.apple.mpegurl");
     res.send(text);
-  } catch (err) {
-    // si falla, devolvemos cache estable
+  } catch {
     res.header("Content-Type", "application/vnd.apple.mpegurl");
     res.send(PLAYLIST_CACHE[channel]);
   }
 });
 
-// --- Proxy dinámico para segmentos ---
-app.use("/proxy/:channel/", (req, res, next) => {
-  const { channel } = req.params;
-  const config = channels[channel];
-  if (!config) return res.status(404).send("Canal no encontrado");
+// Proxies de segmentos (uno por canal, creados solo una vez)
+for (const channel in channels) {
+  app.use(`/proxy/${channel}/`, (req, res, next) => {
+    const config = channels[channel];
+    const baseUrl = (channelStatus[channel].live ? config.live : config.cloud).replace(/[^/]+$/, "");
 
-  const useLive = channelStatus[channel]?.live;
-  const baseUrl = (useLive ? config.live : config.cloud).replace(/[^/]+$/, "");
+    createProxyMiddleware({
+      target: baseUrl,
+      changeOrigin: true,
+      pathRewrite: { [`^/proxy/${channel}/`]: "" },
+      onProxyRes: (proxyRes, req, res) => {
+        res.setHeader("Access-Control-Allow-Origin", "*");
+        res.setHeader("Access-Control-Allow-Methods", "GET,HEAD,OPTIONS");
+        res.setHeader("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Range");
+        res.setHeader("Accept-Ranges", "bytes");
+      }
+    })(req, res, next);
+  });
+}
 
-  createProxyMiddleware({
-    target: baseUrl,
-    changeOrigin: true,
-    pathRewrite: (path) => path.replace(`/proxy/${channel}/`, ""),
-    onProxyRes: (proxyRes, req, res) => {
-      res.setHeader("Access-Control-Allow-Origin", "*");
-      res.setHeader("Access-Control-Allow-Methods", "GET,HEAD,OPTIONS");
-      res.setHeader("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Range");
-      res.setHeader("Accept-Ranges", "bytes");
-    }
-  })(req, res, next);
-});
-
-app.listen(PORT, () => console.log(`✅ Proxy HLS robusto en http://localhost:${PORT}`));
+app.listen(PORT, () => console.log(`✅ Proxy estable en http://localhost:${PORT}`));
