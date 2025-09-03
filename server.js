@@ -1,3 +1,5 @@
+import events from "events";
+events.EventEmitter.defaultMaxListeners = 1000; // o el número que quieras
 import express from "express";
 import fetch from "node-fetch";
 import { createProxyMiddleware } from "http-proxy-middleware";
