@@ -1,10 +1,10 @@
 import express from "express";
 import fetch from "node-fetch";
-import { createProxyMiddleware } from "http-proxy-middleware";
 
 const app = express();
 const PORT = process.env.PORT || 8080;
 
+// Canales configurados
 const channels = {
   mixtv: {
     live: "https://live20.bozztv.com/giatv/giatv-estacionmixtv/estacionmixtv/chunks.m3u8",
@@ -12,19 +12,8 @@ const channels = {
   }
 };
 
-// Estado de fallos por canal
-const channelStatus = {};
-const FAIL_LIMIT = 3; // nº de intentos fallidos antes de cambiar a cloud
-
-// Verificar si live responde
-async function isLive(url) {
-  try {
-    const resp = await fetch(url, { method: "HEAD", timeout: 3000 });
-    return resp.ok;
-  } catch {
-    return false;
-  }
-}
+// Caché de playlists para suavizar cambios
+const playlistCache = {};
 
 // CORS
 app.use((req, res, next) => {
@@ -34,71 +23,73 @@ app.use((req, res, next) => {
   next();
 });
 
-// Playlist con fallback inteligente
+// 📺 Endpoint playlist.m3u8 (con fallback y caché)
 app.get("/proxy/:channel/playlist.m3u8", async (req, res) => {
   const { channel } = req.params;
   const config = channels[channel];
   if (!config) return res.status(404).send("Canal no encontrado");
 
-  if (!channelStatus[channel]) channelStatus[channel] = { fails: 0 };
+  let playlistUrl = config.cloud;
 
-  let useLive = true;
-  const liveAvailable = await isLive(config.live);
+  try {
+    // Probar si live está activo
+    const liveResp = await fetch(config.live, { method: "HEAD", timeout: 2000 });
+    if (liveResp.ok) playlistUrl = config.live;
+  } catch {}
 
-  if (liveAvailable) {
-    channelStatus[channel].fails = 0; // reset
-  } else {
-    channelStatus[channel].fails++;
-    if (channelStatus[channel].fails >= FAIL_LIMIT) {
-      useLive = false; // recién cambia después de varios fallos
+  try {
+    const response = await fetch(playlistUrl);
+    if (response.ok) {
+      let text = await response.text();
+      // Reescribir segmentos
+      text = text.replace(/(.*?\.ts)/g, `/proxy/${channel}/$1`);
+      playlistCache[channel] = text; // actualizar caché
     }
+  } catch (err) {
+    console.error(`Error obteniendo playlist de ${channel}:`, err.message);
   }
 
-  const playlistUrl = useLive ? config.live : config.cloud;
-  const response = await fetch(playlistUrl);
-  let text = await response.text();
-
-  // Reescribir rutas
-  text = text.replace(/(.*?\.ts)/g, `/proxy/${channel}/$1`);
+  // Servir desde cache si no hay nueva
+  if (!playlistCache[channel]) {
+    return res.status(503).send("Playlist no disponible");
+  }
 
   res.header("Content-Type", "application/vnd.apple.mpegurl");
-  res.send(text);
+  res.send(playlistCache[channel]);
 });
 
-// Proxy dinámico para segmentos
-app.use("/proxy/:channel/", async (req, res, next) => {
-  const { channel } = req.params;
+// 🎞️ Endpoint de segmentos .ts (proxy manual sin cortar)
+app.get("/proxy/:channel/:segment", async (req, res) => {
+  const { channel, segment } = req.params;
   const config = channels[channel];
   if (!config) return res.status(404).send("Canal no encontrado");
 
-  if (!channelStatus[channel]) channelStatus[channel] = { fails: 0 };
-
-  const liveAvailable = await isLive(config.live);
-  let useLive = true;
-
-  if (liveAvailable) {
-    channelStatus[channel].fails = 0;
-  } else {
-    channelStatus[channel].fails++;
-    if (channelStatus[channel].fails >= FAIL_LIMIT) {
-      useLive = false;
+  // Determinar baseUrl (live si responde, si no cloud)
+  let baseUrl = config.cloud.substring(0, config.cloud.lastIndexOf("/") + 1);
+  try {
+    const liveResp = await fetch(config.live, { method: "HEAD", timeout: 2000 });
+    if (liveResp.ok) {
+      baseUrl = config.live.substring(0, config.live.lastIndexOf("/") + 1);
     }
+  } catch {}
+
+  const segmentUrl = baseUrl + segment;
+
+  try {
+    const response = await fetch(segmentUrl);
+    if (!response.ok) return res.status(502).send("Error en el segmento");
+
+    // Encabezados CORS y streaming transparente
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET,HEAD,OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Range");
+    res.setHeader("Accept-Ranges", "bytes");
+
+    response.body.pipe(res);
+  } catch (err) {
+    console.error(`Error trayendo segmento ${segment}:`, err.message);
+    res.status(500).send("Error obteniendo segmento");
   }
-
-  const baseUrl = (useLive ? config.live : config.cloud).replace(/[^/]+$/, "");
-
-  createProxyMiddleware({
-    target: baseUrl,
-    changeOrigin: true,
-    pathRewrite: (path) => path.replace(`/proxy/${channel}/`, ""),
-    selfHandleResponse: false,
-    onProxyRes: (proxyRes, req, res) => {
-      res.setHeader("Access-Control-Allow-Origin", "*");
-      res.setHeader("Access-Control-Allow-Methods", "GET,HEAD,OPTIONS");
-      res.setHeader("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Range");
-      res.setHeader("Accept-Ranges", "bytes");
-    }
-  })(req, res, next);
 });
 
-app.listen(PORT, () => console.log(`✅ Proxy HLS con buffer corriendo en http://localhost:${PORT}`));
+app.listen(PORT, () => console.log(`✅ Proxy HLS corriendo en http://localhost:${PORT}`));
