@@ -1,5 +1,6 @@
 import events from "events";
-events.EventEmitter.defaultMaxListeners = 1000; // Permitir muchos listeners
+events.EventEmitter.defaultMaxListeners = 1000;
+
 import express from "express";
 import fetch from "node-fetch";
 import { createProxyMiddleware } from "http-proxy-middleware";
@@ -15,19 +16,17 @@ const channels = {
   }
 };
 
-const channelStatus = {};       // Estado si está live o no
-const PLAYLIST_CACHE = {};      // Caché de la playlist
-const BASEURL_CACHE = {};       // Caché del baseUrl de los segmentos
-const CHECK_INTERVAL = 2000;    // Cada 2 segundos chequeamos el canal
+const channelStatus = {};  // Estado de cada canal
+const PLAYLIST_CACHE = {}; // Última playlist en caché
+const CHECK_INTERVAL = 2000; // 2 segundos
 
-// ------------------- INICIALIZAR -------------------
+// Inicializar estados
 for (const ch in channels) {
   channelStatus[ch] = { live: false };
   PLAYLIST_CACHE[ch] = "#EXTM3U\n";
-  BASEURL_CACHE[ch] = channels[ch].cloud.replace(/[^/]+$/, ""); // inicial cloud
 }
 
-// ------------------- FUNCIONES -------------------
+// ------------------- FUNCIÓN PARA CHEQUEAR SI ESTÁ LIVE -------------------
 async function checkLive(channel, url) {
   try {
     const resp = await fetch(url, { method: "HEAD", timeout: 3000 });
@@ -51,36 +50,39 @@ app.use((req, res, next) => {
 });
 
 // ------------------- PLAYLIST PROXY -------------------
-
 app.get("/proxy/:channel/playlist.m3u8", async (req, res) => {
   const { channel } = req.params;
   const config = channels[channel];
   if (!config) return res.status(404).send("Canal no encontrado");
 
-  const isLive = channelStatus[channel].live;
-  const playlistUrl = isLive ? config.live : config.cloud; // usar siempre actual
+  const playlistUrl = channelStatus[channel].live ? config.live : config.cloud;
 
   try {
     const response = await fetch(playlistUrl);
     let text = await response.text();
 
-    // Reescribir segmentos dinámicamente
+    // Reescribir segmentos para que pasen por nuestro proxy
     text = text.replace(/(.*?\.ts)/g, `/proxy/${channel}/$1`);
+    PLAYLIST_CACHE[channel] = text;
+
     res.header("Content-Type", "application/vnd.apple.mpegurl");
     res.send(text);
   } catch {
+    // En caso de error, devolver la última playlist en caché
     res.header("Content-Type", "application/vnd.apple.mpegurl");
-    res.send(PLAYLIST_CACHE[channel]); // fallback
+    res.send(PLAYLIST_CACHE[channel]);
   }
 });
+
 // ------------------- PROXY DE SEGMENTOS -------------------
 for (const channel in channels) {
   app.use(`/proxy/${channel}/`, (req, res, next) => {
-    const baseUrl = BASEURL_CACHE[channel]; // usar URL congelada
-    if (!baseUrl) return res.status(503).send("Playlist no disponible aún");
+    // Decidir si usar live o cloud **cada request**
+    const baseUrl = channelStatus[channel].live ? channels[channel].live : channels[channel].cloud;
+    const baseUrlDir = baseUrl.replace(/[^/]+$/, "");
 
     createProxyMiddleware({
-      target: baseUrl,
+      target: baseUrlDir,
       changeOrigin: true,
       pathRewrite: { [`^/proxy/${channel}/`]: "" },
       onProxyRes: (proxyRes, req, res) => {
@@ -92,6 +94,13 @@ for (const channel in channels) {
     })(req, res, next);
   });
 }
+
+// ------------------- ENDPOINT OPCIONAL PARA CONSULTAR ESTADO -------------------
+app.get("/status/:channel", (req, res) => {
+  const { channel } = req.params;
+  if (!channels[channel]) return res.status(404).send({ error: "Canal no encontrado" });
+  res.json({ live: channelStatus[channel].live });
+});
 
 // ------------------- INICIAR SERVIDOR -------------------
 app.listen(PORT, () => console.log(`✅ Proxy estable en http://localhost:${PORT}`));
