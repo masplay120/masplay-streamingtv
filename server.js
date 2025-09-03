@@ -15,7 +15,7 @@ const channels = {
 // Estado de cada canal
 const channelStatus = {};
 const PLAYLIST_CACHE = {};
-const CHECK_INTERVAL = 5000;
+const CHECK_INTERVAL = 1000;
 
 // Inicializar estado
 for (const ch in channels) {
