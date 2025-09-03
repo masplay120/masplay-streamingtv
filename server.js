@@ -19,7 +19,7 @@ const FAIL_LIMIT = 1; // nº de intentos fallidos antes de cambiar a cloud
 // Verificar si live responde
 async function isLive(url) {
   try {
-    const resp = await fetch(url, { method: "HEAD", timeout: 9000 });
+    const resp = await fetch(url, { method: "HEAD", timeout: 3000 });
     return resp.ok;
   } catch {
     return false;
@@ -66,37 +66,39 @@ app.get("/proxy/:channel/playlist.m3u8", async (req, res) => {
 });
 
 // Proxy dinámico para segmentos
-app.use("/proxy/:channel/", async (req, res) => {
+app.use("/proxy/:channel/", async (req, res, next) => {
   const { channel } = req.params;
   const config = channels[channel];
   if (!config) return res.status(404).send("Canal no encontrado");
 
-  // Revisar qué usar (live o cloud) sin matar el endpoint
-  let baseUrl = config.cloud.substring(0, config.cloud.lastIndexOf("/") + 1);
-  try {
-    const liveResp = await fetch(config.live, { method: "HEAD", timeout: 2000 });
-    if (liveResp.ok) {
-      baseUrl = config.live.substring(0, config.live.lastIndexOf("/") + 1);
+  if (!channelStatus[channel]) channelStatus[channel] = { fails: 0 };
+
+  const liveAvailable = await isLive(config.live);
+  let useLive = true;
+
+  if (liveAvailable) {
+    channelStatus[channel].fails = 0;
+  } else {
+    channelStatus[channel].fails++;
+    if (channelStatus[channel].fails >= FAIL_LIMIT) {
+      useLive = false;
     }
-  } catch {}
-
-  const segmentUrl = baseUrl + segment;
-
-  try {
-    const response = await fetch(segmentUrl);
-    if (!response.ok) return res.status(502).send("Error en el segmento");
-
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET,HEAD,OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Range");
-    res.setHeader("Accept-Ranges", "bytes");
-
-    response.body.pipe(res); // 🔑 nunca corta, solo cambia la fuente
-  } catch (err) {
-    res.status(500).send("Error obteniendo segmento");
   }
+
+  const baseUrl = (useLive ? config.live : config.cloud).replace(/[^/]+$/, "");
+
+  createProxyMiddleware({
+    target: baseUrl,
+    changeOrigin: true,
+    pathRewrite: (path) => path.replace(`/proxy/${channel}/`, ""),
+    selfHandleResponse: false,
+    onProxyRes: (proxyRes, req, res) => {
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Access-Control-Allow-Methods", "GET,HEAD,OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Range");
+      res.setHeader("Accept-Ranges", "bytes");
+    }
+  })(req, res, next);
 });
-
-
 
 app.listen(PORT, () => console.log(`✅ Proxy HLS con buffer corriendo en http://localhost:${PORT}`));
