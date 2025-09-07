@@ -12,8 +12,8 @@ const channels = {
   mixtv: {
     live: "https://live20.bozztv.com/giatv/giatv-estacionmixtv/estacionmixtv/chunks.m3u8",
     cloud: "https://live20.bozztv.com/giatvplayout7/giatv-208566/tracks-v1a1/mono.ts.m3u8"
-  }
-  ,Canal9envivo: {
+  },
+  Canal9envivo: {
     live: "https://livetrx01.vodgc.net/eltrecetv/index.m3u8",
     cloud: "https://masplay-streamingtv.onrender.com/proxy/Canal9envivo/playlist.m3u8"
   },
@@ -21,12 +21,11 @@ const channels = {
     live: "https://ejemplo.com/canal3/live/playlist.m3u8",
     cloud: "https://ejemplo.com/canal3/vod/fallback.m3u8"
   }
-
 };
 
 const channelStatus = {};  // Estado de cada canal
 const PLAYLIST_CACHE = {}; // Última playlist en caché
-const CHECK_INTERVAL = 2000; // 2 segundos
+const CHECK_INTERVAL = 5000; // 5 segundos
 
 // Inicializar estados
 for (const ch in channels) {
@@ -37,7 +36,7 @@ for (const ch in channels) {
 // ------------------- FUNCIÓN PARA CHEQUEAR SI ESTÁ LIVE -------------------
 async function checkLive(channel, url) {
   try {
-    const resp = await fetch(url, { method: "HEAD", timeout: 3000 });
+    const resp = await fetch(url, { headers: { Range: "bytes=0-200" } });
     channelStatus[channel].live = resp.ok;
   } catch {
     channelStatus[channel].live = false;
@@ -69,8 +68,12 @@ app.get("/proxy/:channel/playlist.m3u8", async (req, res) => {
     const response = await fetch(playlistUrl);
     let text = await response.text();
 
-    // Reescribir segmentos para que pasen por nuestro proxy
-    text = text.replace(/(.*?\.ts)/g, `/proxy/${channel}/$1`);
+    // Reescribir segmentos solo si son relativos
+    text = text.replace(/^(?!#)(.*\.ts.*)$/gm, (line) => {
+      if (line.startsWith("http")) return line;
+      return `/proxy/${channel}/${line}`;
+    });
+
     PLAYLIST_CACHE[channel] = text;
 
     res.header("Content-Type", "application/vnd.apple.mpegurl");
@@ -85,9 +88,12 @@ app.get("/proxy/:channel/playlist.m3u8", async (req, res) => {
 // ------------------- PROXY DE SEGMENTOS -------------------
 for (const channel in channels) {
   app.use(`/proxy/${channel}/`, (req, res, next) => {
-    // Decidir si usar live o cloud **cada request**
     const baseUrl = channelStatus[channel].live ? channels[channel].live : channels[channel].cloud;
-    const baseUrlDir = baseUrl.replace(/[^/]+$/, "");
+
+    // Obtener directorio base seguro
+    const urlObj = new URL(baseUrl);
+    urlObj.pathname = urlObj.pathname.substring(0, urlObj.pathname.lastIndexOf("/") + 1);
+    const baseUrlDir = urlObj.toString();
 
     createProxyMiddleware({
       target: baseUrlDir,
