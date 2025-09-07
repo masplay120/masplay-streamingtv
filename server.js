@@ -1,6 +1,5 @@
 import events from "events";
-events.EventEmitter.defaultMaxListeners = 1000;
-
+events.EventEmitter.defaultMaxListeners = 1000000;
 import express from "express";
 import fetch from "node-fetch";
 import { createProxyMiddleware } from "http-proxy-middleware";
@@ -14,6 +13,15 @@ const channels = {
     live: "https://live20.bozztv.com/giatv/giatv-estacionmixtv/estacionmixtv/chunks.m3u8",
     cloud: "https://live20.bozztv.com/giatvplayout7/giatv-208566/tracks-v1a1/mono.ts.m3u8"
   }
+  ,flowsports3: {
+    live: "https://edge-live32-sl.cvattv.com.ar/tok_eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJleHAiOiIxNzU3NDU1NTEzIiwic2lwIjoiMTkwLjE4My4wLjEwNyIsInBhdGgiOiIvbGl2ZS9jNGVkcy9FdmVudG9zM19VWS9TQV9MaXZlX2Rhc2hfZW5jX0MvIiwic2Vzc2lvbl9jZG5faWQiOiI5OGVjMjBiMDk4ZTdjZTlhIiwic2Vzc2lvbl9pZCI6IiIsImNsaWVudF9pZCI6IiIsImRldmljZV9pZCI6IiIsIm1heF9zZXNzaW9ucyI6MCwic2Vzc2lvbl9kdXJhdGlvbiI6MCwidXJsIjoiaHR0cHM6Ly8yMDEuMjM1LjY2LjExNSIsImF1ZCI6IjEwMCIsInNvdXJjZXMiOls4NSwxNDQsODYsODhdfQ==.7c8omdIcd5vswI4T-nYlf4s7x46USI3LccanBmSOgYtEcstnXBn8Cw-u7qH7q0OpQ2kbyxEm60gt28fQ1cO9Bg==/live/c4eds/Eventos3_UY/SA_Live_dash_enc_C/Eventos3_UY.mpd",
+    cloud: "https://ejemplo.com/canal2/vod/fallback.m3u8"
+  },
+  canal3: {
+    live: "https://ejemplo.com/canal3/live/playlist.m3u8",
+    cloud: "https://ejemplo.com/canal3/vod/fallback.m3u8"
+  }
+
 };
 
 const channelStatus = {};  // Estado de cada canal
