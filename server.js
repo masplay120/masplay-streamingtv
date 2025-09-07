@@ -13,12 +13,12 @@ const channels = {
     live: "https://live20.bozztv.com/giatv/giatv-estacionmixtv/estacionmixtv/chunks.m3u8",
     cloud: "https://live20.bozztv.com/giatvplayout7/giatv-208566/tracks-v1a1/mono.ts.m3u8"
   },
-  Canal9envivo: {
+  eltrece: {
     live: "https://livetrx01.vodgc.net/eltrecetv/index.m3u8",
     cloud: "https://masplay-streamingtv.onrender.com/proxy/Canal9envivo/playlist.m3u8"
   },
-  canal3: {
-    live: "https://ejemplo.com/canal3/live/playlist.m3u8",
+  telefe: {
+    live: "http://servidorvip.net/rivadera2025/123123456456/384819",
     cloud: "https://ejemplo.com/canal3/vod/fallback.m3u8"
   }
 };
