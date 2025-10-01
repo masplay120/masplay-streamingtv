@@ -17,9 +17,9 @@ const channels = {
     live: "https://livetrx01.vodgc.net/eltrecetv/index.m3u8",
     cloud: "https://masplay-streamingtv.onrender.com/proxy/Canal9envivo/playlist.m3u8"
   },
-  telefe: {
+  pruebas: {
     live: "http://servidorvip.net/rivadera2025/123123456456/384819?m3u8",
-    cloud: "https://ejemplo.com/canal3/vod/fallback.m3u8"
+    cloud: "https://radio.x10.mx/video/playlist.php?dummy=.m3u8"
   }
 };
 
