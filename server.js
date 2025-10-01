@@ -19,7 +19,7 @@ const channels = {
   },
   pruebas: {
     live: "http://servidorvip.net/rivadera2025/123123456456/384819?m3u8",
-    cloud: "https://radio.x10.mx/video/playlist.php?dummy=.m3u8"
+    cloud: "http://radio.x10.mx/video/playlist.php?dummy=.m3u8"
   }
 };
 
