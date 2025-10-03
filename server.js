@@ -1,13 +1,13 @@
 import events from "events";
 events.EventEmitter.defaultMaxListeners = 1000000;
-
 import express from "express";
 import fetch from "node-fetch";
-import https from "https";
+import { createProxyMiddleware } from "http-proxy-middleware";
 
 const app = express();
 const PORT = process.env.PORT || 8080;
 
+// ------------------- CONFIGURACIÓN -------------------
 const channels = {
   mixtv: {
     live: "https://streamlive8.hearthis.at/hls/10778826_orig/index.m3u8",
@@ -23,9 +23,9 @@ const channels = {
   }
 };
 
-const channelStatus = {};
-const PLAYLIST_CACHE = {};
-const CHECK_INTERVAL = 5000;
+const channelStatus = {};  // Estado de cada canal
+const PLAYLIST_CACHE = {}; // Última playlist en caché
+const CHECK_INTERVAL = 5000; // 5 segundos
 
 // Inicializar estados
 for (const ch in channels) {
@@ -33,16 +33,17 @@ for (const ch in channels) {
   PLAYLIST_CACHE[ch] = "#EXTM3U\n";
 }
 
-// ------------------- CHEQUEO DE STREAM -------------------
+// ------------------- FUNCIÓN PARA CHEQUEAR SI ESTÁ LIVE -------------------
 async function checkLive(channel, url) {
   try {
-    const resp = await fetch(url, { headers: { Range: "bytes=0-200" }, agent: new https.Agent({ rejectUnauthorized: false }) });
+    const resp = await fetch(url, { headers: { Range: "bytes=0-200" } });
     channelStatus[channel].live = resp.ok;
   } catch {
     channelStatus[channel].live = false;
   }
 }
 
+// ------------------- CHEQUEO EN INTERVALO -------------------
 for (const ch in channels) {
   setInterval(() => checkLive(ch, channels[ch].live), CHECK_INTERVAL);
 }
@@ -64,66 +65,61 @@ app.get("/proxy/:channel/playlist.m3u8", async (req, res) => {
   const playlistUrl = channelStatus[channel].live ? config.live : config.cloud;
 
   try {
-    const response = await fetch(playlistUrl, { 
-      headers: { "User-Agent": "VLC/3.0", "Accept": "*/*" }, 
-      agent: new https.Agent({ rejectUnauthorized: false })
-    });
+    const response = await fetch(playlistUrl);
     let text = await response.text();
 
-    // Reescribir segmentos relativos para pasar por proxy
-    text = text.replace(/^(?!#)(.*\.ts)$/gm, (line) => {
+    // Reescribir segmentos solo si son relativos
+    text = text.replace(/^(?!#)(.*\.ts.*)$/gm, (line) => {
       if (line.startsWith("http")) return line;
-      return `/proxy/${channel}/segments/${line}`;
+      return `/proxy/${channel}/${line}`;
     });
 
     PLAYLIST_CACHE[channel] = text;
 
     res.header("Content-Type", "application/vnd.apple.mpegurl");
-    res.header("Accept-Ranges", "bytes");
     res.send(text);
-  } catch (err) {
-    console.error(err);
+  } catch {
+    // En caso de error, devolver la última playlist en caché
     res.header("Content-Type", "application/vnd.apple.mpegurl");
     res.send(PLAYLIST_CACHE[channel]);
-  }
-});
-
-// ------------------- SEGMENTOS PROXY -------------------
-app.use("/proxy/:channel/segments/", async (req, res) => {
-  const { channel } = req.params;
-  const config = channels[channel];
-  if (!config) return res.status(404).send("Canal no encontrado");
-
-  const baseUrl = new URL(channelStatus[channel].live ? config.live : config.cloud);
-  baseUrl.pathname = baseUrl.pathname.substring(0, baseUrl.pathname.lastIndexOf("/") + 1);
-
-  const segmentPath = req.path.replace(`/proxy/${channel}/segments/`, "");
-  const targetUrl = `${baseUrl.toString()}${segmentPath}`;
-
-  try {
-    const response = await fetch(targetUrl, { 
-      headers: { 
-        "User-Agent": "VLC/3.0", 
-        "Accept": "*/*", 
-        "Range": req.headers.range || "bytes=0-" 
-      }, 
+    const response = await fetch(playlistUrl, { 
+      headers: { "User-Agent": "VLC/3.0", "Accept": "*/*" }, 
       agent: new https.Agent({ rejectUnauthorized: false })
     });
-
-    res.status(response.status);
-    response.headers.forEach((value, key) => res.setHeader(key, value));
-    response.body.pipe(res);
-  } catch (err) {
-    console.error(err);
-    res.status(500).send("Error al obtener segmento");
+    let text = await response.text();
   }
 });
 
-// ------------------- ESTADO DEL CANAL -------------------
+// ------------------- PROXY DE SEGMENTOS -------------------
+for (const channel in channels) {
+  app.use(`/proxy/${channel}/`, (req, res, next) => {
+    const baseUrl = channelStatus[channel].live ? channels[channel].live : channels[channel].cloud;
+
+    // Obtener directorio base seguro
+    const urlObj = new URL(baseUrl);
+    urlObj.pathname = urlObj.pathname.substring(0, urlObj.pathname.lastIndexOf("/") + 1);
+    const baseUrlDir = urlObj.toString();
+
+    createProxyMiddleware({
+      target: baseUrlDir,
+      changeOrigin: true,
+      pathRewrite: { [`^/proxy/${channel}/`]: "" },
+      onProxyRes: (proxyRes, req, res) => {
+        res.setHeader("Access-Control-Allow-Origin", "*");
+        res.setHeader("Access-Control-Allow-Methods", "GET,HEAD,OPTIONS");
+        res.setHeader("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Range");
+        res.setHeader("Accept-Ranges", "bytes");
+      }
+    })(req, res, next);
+  });
+}
+
+// ------------------- ENDPOINT OPCIONAL PARA CONSULTAR ESTADO -------------------
 app.get("/status/:channel", (req, res) => {
   const { channel } = req.params;
   if (!channels[channel]) return res.status(404).send({ error: "Canal no encontrado" });
-  res.send({ live: channelStatus[channel].live });
+  res.json({ live: channelStatus[channel].live });
 });
 
-app.listen(PORT, () => console.log(`✅ Proxy HLS listo en http://localhost:${PORT}`));
+// ------------------- INICIAR SERVIDOR -------------------
+app.listen(PORT, () => console.log(`✅ Proxy estable en http://localhost:${PORT}`));
