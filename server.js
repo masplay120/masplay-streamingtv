@@ -18,8 +18,8 @@ const channels = {
     cloud: "https://masplay-streamingtv.onrender.com/proxy/Canal9envivo/playlist.m3u8"
   },
   pruebas: {
-    live: "http://servidorvip.net/rivadera2025/123123456456/384819?m3u8",
-    cloud: "http://radio.x10.mx/video/playlist.php?dummy=.m3u8"
+    live: "https://streamlive8.hearthis.at/hls/10778826.m3u8",
+    cloud: "https://streamlive8.hearthis.at/hls/10778826.m3u8"
   }
 };
 
