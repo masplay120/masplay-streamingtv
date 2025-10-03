@@ -10,7 +10,7 @@ const PORT = process.env.PORT || 8080;
 // ------------------- CONFIGURACIÓN -------------------
 const channels = {
   mixtv: {
-    live: "https://live20.bozztv.com/giatv/giatv-estacionmixtv/estacionmixtv/chunks.m3u8",
+    live: "https://streamlive8.hearthis.at/hls/10778826_hi/index.m3u8",
     cloud: "https://live20.bozztv.com/giatvplayout7/giatv-208566/tracks-v1a1/mono.ts.m3u8"
   },
   eltrece: {
