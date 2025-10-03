@@ -1,18 +1,22 @@
 import express from "express";
 import fetch from "node-fetch";
-import { createProxyMiddleware } from "http-proxy-middleware";
+import https from "https";
 
 const app = express();
-const PORT = 8080;
+const PORT = process.env.PORT || 8080;
 
 const channels = {
   mixtv: {
     live: "https://streamlive8.hearthis.at/hls/10778826_orig/index.m3u8",
     cloud: "https://live20.bozztv.com/giatvplayout7/giatv-208566/tracks-v1a1/mono.ts.m3u8"
+  },
+  eltrece: {
+    live: "https://livetrx01.vodgc.net/eltrecetv/index.m3u8",
+    cloud: "https://masplay-streamingtv.onrender.com/proxy/Canal9envivo/playlist.m3u8"
   }
 };
 
-// ------------------- CORS -------------------
+// ------------------- CORS GLOBAL -------------------
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Methods", "GET,HEAD,OPTIONS");
@@ -20,7 +24,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// ------------------- PLAYLIST -------------------
+// ------------------- PLAYLIST PROXY -------------------
 app.get("/proxy/:channel/playlist.m3u8", async (req, res) => {
   const { channel } = req.params;
   const config = channels[channel];
@@ -29,12 +33,16 @@ app.get("/proxy/:channel/playlist.m3u8", async (req, res) => {
   const playlistUrl = config.live;
 
   try {
-    const response = await fetch(playlistUrl, { headers: { "User-Agent": "Mozilla/5.0", "Accept": "*/*" } });
+    const response = await fetch(playlistUrl, {
+      headers: { "User-Agent": "Mozilla/5.0", "Accept": "*/*" },
+      agent: new https.Agent({ rejectUnauthorized: false }) // Ignorar SSL
+    });
+
     let text = await response.text();
 
-    // Reescribir segmentos relativos
+    // Reescribir segmentos relativos a /segments/
     text = text.replace(/^(?!#)(.*\.ts)$/gm, (line) => {
-      if (line.startsWith("http")) return line; // deja absolutas
+      if (line.startsWith("http")) return line;
       return `/proxy/${channel}/segments/${line}`;
     });
 
@@ -46,8 +54,8 @@ app.get("/proxy/:channel/playlist.m3u8", async (req, res) => {
   }
 });
 
-// ------------------- SEGMENTOS -------------------
-app.use("/proxy/:channel/segments/", async (req, res, next) => {
+// ------------------- SEGMENTOS PROXY -------------------
+app.use("/proxy/:channel/segments/", async (req, res) => {
   const { channel } = req.params;
   const config = channels[channel];
   if (!config) return res.status(404).send("Canal no encontrado");
@@ -55,13 +63,17 @@ app.use("/proxy/:channel/segments/", async (req, res, next) => {
   const baseUrl = new URL(config.live);
   baseUrl.pathname = baseUrl.pathname.substring(0, baseUrl.pathname.lastIndexOf("/") + 1);
 
-  // Reconstruir URL del segmento
   const segmentPath = req.path.replace(`/proxy/${channel}/segments/`, "");
   const targetUrl = `${baseUrl.toString()}${segmentPath}`;
 
   try {
     const response = await fetch(targetUrl, {
-      headers: { "User-Agent": "Mozilla/5.0", "Accept": "*/*", "Range": req.headers.range || "bytes=0-" }
+      headers: { 
+        "User-Agent": "Mozilla/5.0", 
+        "Accept": "*/*", 
+        "Range": req.headers.range || "bytes=0-" 
+      },
+      agent: new https.Agent({ rejectUnauthorized: false }) // Ignorar SSL
     });
 
     res.status(response.status);
@@ -71,6 +83,13 @@ app.use("/proxy/:channel/segments/", async (req, res, next) => {
     console.error(err);
     res.status(500).send("Error al obtener segmento");
   }
+});
+
+// ------------------- ENDPOINT ESTADO -------------------
+app.get("/status/:channel", (req, res) => {
+  const { channel } = req.params;
+  if (!channels[channel]) return res.status(404).send({ error: "Canal no encontrado" });
+  res.send({ live: true });
 });
 
 app.listen(PORT, () => console.log(`✅ Proxy corriendo en http://localhost:${PORT}`));
