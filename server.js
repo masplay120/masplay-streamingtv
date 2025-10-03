@@ -1,5 +1,6 @@
 import events from "events";
 events.EventEmitter.defaultMaxListeners = 1000000;
+
 import express from "express";
 import fetch from "node-fetch";
 import { createProxyMiddleware } from "http-proxy-middleware";
@@ -23,9 +24,9 @@ const channels = {
   }
 };
 
-const channelStatus = {};  // Estado de cada canal
-const PLAYLIST_CACHE = {}; // Última playlist en caché
-const CHECK_INTERVAL = 5000; // 5 segundos
+const channelStatus = {};
+const PLAYLIST_CACHE = {};
+const CHECK_INTERVAL = 5000;
 
 // Inicializar estados
 for (const ch in channels) {
@@ -33,7 +34,7 @@ for (const ch in channels) {
   PLAYLIST_CACHE[ch] = "#EXTM3U\n";
 }
 
-// ------------------- FUNCIÓN PARA CHEQUEAR SI ESTÁ LIVE -------------------
+// ------------------- CHEQUEO DE STREAMS -------------------
 async function checkLive(channel, url) {
   try {
     const resp = await fetch(url, { headers: { Range: "bytes=0-200" } });
@@ -43,7 +44,6 @@ async function checkLive(channel, url) {
   }
 }
 
-// ------------------- CHEQUEO EN INTERVALO -------------------
 for (const ch in channels) {
   setInterval(() => checkLive(ch, channels[ch].live), CHECK_INTERVAL);
 }
@@ -56,7 +56,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// ------------------- PLAYLIST PROXY -------------------
+// ------------------- ENDPOINT DE PLAYLIST PROXY -------------------
 app.get("/proxy/:channel/playlist.m3u8", async (req, res) => {
   const { channel } = req.params;
   const config = channels[channel];
@@ -65,13 +65,30 @@ app.get("/proxy/:channel/playlist.m3u8", async (req, res) => {
   const playlistUrl = channelStatus[channel].live ? config.live : config.cloud;
 
   try {
-    const response = await fetch(playlistUrl);
+    const response = await fetch(playlistUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "*/*",
+        "Range": "bytes=0-"
+      }
+    });
     let text = await response.text();
 
-    // Reescribir segmentos solo si son relativos
-    text = text.replace(/^(?!#)(.*\.ts.*)$/gm, (line) => {
-      if (line.startsWith("http")) return line;
-      return `/proxy/${channel}/${line}`;
+    // Reescribir URLs de .ts y .m3u8
+    text = text.replace(/^(?!#)(.*)$/gm, (line) => {
+      if (line.startsWith("#")) return line;
+
+      if (line.endsWith(".ts")) {
+        if (line.startsWith("http")) return `/proxy/${channel}/?url=${encodeURIComponent(line)}`;
+        return `/proxy/${channel}/${line}`;
+      }
+
+      if (line.endsWith(".m3u8")) {
+        if (line.startsWith("http")) return `/proxy/${channel}/?url=${encodeURIComponent(line)}`;
+        return `/proxy/${channel}/${line}`;
+      }
+
+      return line;
     });
 
     PLAYLIST_CACHE[channel] = text;
@@ -79,26 +96,36 @@ app.get("/proxy/:channel/playlist.m3u8", async (req, res) => {
     res.header("Content-Type", "application/vnd.apple.mpegurl");
     res.send(text);
   } catch {
-    // En caso de error, devolver la última playlist en caché
     res.header("Content-Type", "application/vnd.apple.mpegurl");
     res.send(PLAYLIST_CACHE[channel]);
   }
 });
 
-// ------------------- PROXY DE SEGMENTOS -------------------
+// ------------------- ENDPOINT PROXY DE SEGMENTOS Y PLAYLISTS ANIDADAS -------------------
 for (const channel in channels) {
   app.use(`/proxy/${channel}/`, (req, res, next) => {
-    const baseUrl = channelStatus[channel].live ? channels[channel].live : channels[channel].cloud;
+    let targetUrl;
 
-    // Obtener directorio base seguro
-    const urlObj = new URL(baseUrl);
-    urlObj.pathname = urlObj.pathname.substring(0, urlObj.pathname.lastIndexOf("/") + 1);
-    const baseUrlDir = urlObj.toString();
+    // Si viene ?url= es una playlist o TS absoluto
+    if (req.query.url) {
+      targetUrl = decodeURIComponent(req.query.url);
+    } else {
+      const baseUrl = channelStatus[channel].live ? channels[channel].live : channels[channel].cloud;
+      const urlObj = new URL(baseUrl);
+      urlObj.pathname = urlObj.pathname.substring(0, urlObj.pathname.lastIndexOf("/") + 1) + req.path.replace(`/${channel}/`, "");
+      targetUrl = urlObj.toString();
+    }
 
     createProxyMiddleware({
-      target: baseUrlDir,
+      target: targetUrl,
       changeOrigin: true,
-      pathRewrite: { [`^/proxy/${channel}/`]: "" },
+      selfHandleResponse: false,
+      onProxyReq: (proxyReq, req, res) => {
+        proxyReq.setHeader("User-Agent", "Mozilla/5.0");
+        proxyReq.setHeader("Accept", "*/*");
+      },
+      pathRewrite: { "^/proxy/": "" },
+      logLevel: "error",
       onProxyRes: (proxyRes, req, res) => {
         res.setHeader("Access-Control-Allow-Origin", "*");
         res.setHeader("Access-Control-Allow-Methods", "GET,HEAD,OPTIONS");
