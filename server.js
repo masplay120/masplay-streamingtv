@@ -4,15 +4,19 @@ import express from "express";
 import fetch from "node-fetch";
 import { createProxyMiddleware } from "http-proxy-middleware";
 import events from "events";
+import basicAuth from "express-basic-auth"; // 🆕 Import para autenticación
+
 events.EventEmitter.defaultMaxListeners = 1000000;
 
 const app = express();
 const PORT = process.env.PORT || 8080;
 app.use(express.json());
 
+// ------------------ RUTA DEL ARCHIVO DE CANALES ------------------
 const CHANNELS_PATH = path.join(process.cwd(), "channels.json");
 let channels = JSON.parse(fs.readFileSync(CHANNELS_PATH, "utf8"));
 
+// ------------------ VARIABLES GLOBALES ------------------
 const channelStatus = {};
 const PLAYLIST_CACHE = {};
 const CHECK_INTERVAL = 10000; // 10 segundos
@@ -44,6 +48,18 @@ app.use((req, res, next) => {
   res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Range");
   next();
 });
+
+// ------------------ 🔐 AUTENTICACIÓN DEL PANEL ADMIN ------------------
+// Usa variables de entorno: ADMIN_USER y ADMIN_PASS
+// En Render: Configura estas variables en "Environment → Environment Variables"
+app.use(
+  "/admin",
+  basicAuth({
+    users: { [process.env.ADMIN_USER]: process.env.ADMIN_PASS },
+    challenge: true, // hace que el navegador pida usuario/contraseña
+    unauthorizedResponse: (req) => "Acceso denegado: credenciales incorrectas"
+  })
+);
 
 // ------------------ PANEL ADMIN ------------------
 app.use("/admin", express.static("admin"));
@@ -127,5 +143,5 @@ app.get("/status/:channel", (req, res) => {
 
 // ------------------ SERVIDOR ------------------
 app.listen(PORT, () => {
-  console.log(`✅ Proxy TV con conmutación en vivo en http://localhost:${PORT}`);
+  console.log(`✅ Proxy TV con seguridad en http://localhost:${PORT}`);
 });
