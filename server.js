@@ -4,19 +4,39 @@ import express from "express";
 import fetch from "node-fetch";
 import { createProxyMiddleware } from "http-proxy-middleware";
 import events from "events";
-import basicAuth from "express-basic-auth"; // 🆕 Import para autenticación
-
 events.EventEmitter.defaultMaxListeners = 1000000;
 
 const app = express();
 const PORT = process.env.PORT || 8080;
 app.use(express.json());
 
-// ------------------ RUTA DEL ARCHIVO DE CANALES ------------------
+// =============================
+// 🔐 SEGURIDAD ADMIN PANEL
+// =============================
+const ADMIN_USER = process.env.ADMIN_USER || "admin";
+const ADMIN_PASS = process.env.ADMIN_PASS || "1234";
+
+app.use("/admin", (req, res, next) => {
+  const authHeader = req.headers.authorization || "";
+  const [type, credentials] = authHeader.split(" ");
+
+  if (type === "Basic" && credentials) {
+    const [user, pass] = Buffer.from(credentials, "base64").toString().split(":");
+    if (user === ADMIN_USER && pass === ADMIN_PASS) {
+      return next();
+    }
+  }
+
+  res.set("WWW-Authenticate", 'Basic realm="Panel Admin"');
+  res.status(401).send("Acceso denegado");
+});
+
+// =============================
+// 📡 CONFIGURACIÓN DE CANALES
+// =============================
 const CHANNELS_PATH = path.join(process.cwd(), "channels.json");
 let channels = JSON.parse(fs.readFileSync(CHANNELS_PATH, "utf8"));
 
-// ------------------ VARIABLES GLOBALES ------------------
 const channelStatus = {};
 const PLAYLIST_CACHE = {};
 const CHECK_INTERVAL = 10000; // 10 segundos
@@ -26,7 +46,9 @@ for (const ch in channels) {
   PLAYLIST_CACHE[ch] = "#EXTM3U\n";
 }
 
-// ------------------ FUNCIÓN DE TESTEO DE LIVE ------------------
+// =============================
+// 🧠 FUNCIÓN DE TESTEO DE LIVE
+// =============================
 async function checkLive(channel) {
   const url = channels[channel].live;
   try {
@@ -41,7 +63,9 @@ async function checkLive(channel) {
   }
 }
 
-// ------------------ CORS ------------------
+// =============================
+// 🌍 CORS
+// =============================
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Methods", "GET,HEAD,OPTIONS");
@@ -49,19 +73,9 @@ app.use((req, res, next) => {
   next();
 });
 
-// ------------------ 🔐 AUTENTICACIÓN DEL PANEL ADMIN ------------------
-// Usa variables de entorno: ADMIN_USER y ADMIN_PASS
-// En Render: Configura estas variables en "Environment → Environment Variables"
-app.use(
-  "/admin",
-  basicAuth({
-    users: { [process.env.ADMIN_USER]: process.env.ADMIN_PASS },
-    challenge: true, // hace que el navegador pida usuario/contraseña
-    unauthorizedResponse: (req) => "Acceso denegado: credenciales incorrectas"
-  })
-);
-
-// ------------------ PANEL ADMIN ------------------
+// =============================
+// 🧰 PANEL ADMIN (protegido)
+// =============================
 app.use("/admin", express.static("admin"));
 
 app.get("/api/channels", (req, res) => res.json(channels));
@@ -72,7 +86,9 @@ app.post("/api/channels", (req, res) => {
   res.json({ message: "Canales actualizados correctamente" });
 });
 
-// ------------------ PROXY DE PLAYLIST ------------------
+// =============================
+// 🎛️ PROXY DE PLAYLIST
+// =============================
 app.get("/proxy/:channel/playlist.m3u8", async (req, res) => {
   const { channel } = req.params;
   const config = channels[channel];
@@ -103,7 +119,9 @@ app.get("/proxy/:channel/playlist.m3u8", async (req, res) => {
   }
 });
 
-// ------------------ PROXY DE SEGMENTOS (TS) ------------------
+// =============================
+// 🎞️ PROXY DE SEGMENTOS (TS)
+// =============================
 app.use("/proxy/:channel/", async (req, res, next) => {
   const { channel } = req.params;
   const config = channels[channel];
@@ -112,7 +130,6 @@ app.use("/proxy/:channel/", async (req, res, next) => {
   // Cada solicitud de segmento también verifica el estado actual
   let isLive = channelStatus[channel].live;
   if (!isLive) {
-    // Si el live está marcado como off, intenta un chequeo rápido
     isLive = await checkLive(channel);
   }
 
@@ -134,14 +151,18 @@ app.use("/proxy/:channel/", async (req, res, next) => {
   })(req, res, next);
 });
 
-// ------------------ ESTADO ------------------
+// =============================
+// 📊 ESTADO DE CANALES
+// =============================
 app.get("/status/:channel", (req, res) => {
   const { channel } = req.params;
   if (!channels[channel]) return res.status(404).json({ error: "Canal no encontrado" });
   res.json({ live: channelStatus[channel].live });
 });
 
-// ------------------ SERVIDOR ------------------
+// =============================
+// 🚀 INICIO DEL SERVIDOR
+// =============================
 app.listen(PORT, () => {
-  console.log(`✅ Proxy TV con seguridad en http://localhost:${PORT}`);
+  console.log(`✅ Proxy TV con conmutación en vivo activo en http://localhost:${PORT}`);
 });
