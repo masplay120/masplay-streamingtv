@@ -13,9 +13,8 @@ app.use(express.json());
 // =============================
 // 🔐 SEGURIDAD ADMIN PANEL
 // =============================
-const ADMIN_USER = process.env.ADMIN_USER || "youmas";
+const ADMIN_USER = process.env.ADMIN_USER || "admin";
 const ADMIN_PASS = process.env.ADMIN_PASS || "you120";
-
 
 app.use("/admin", (req, res, next) => {
   const authHeader = req.headers.authorization || "";
