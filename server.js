@@ -4,7 +4,7 @@ import express from "express";
 import fetch from "node-fetch";
 import { createProxyMiddleware } from "http-proxy-middleware";
 import events from "events";
-events.EventEmitter.defaultMaxListeners = 1000000;
+events.EventEmitter.defaultMaxListeners = 1000000000000000000000;
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -32,6 +32,16 @@ app.use("/admin", (req, res, next) => {
 });
 
 // =============================
+// 🌍 CORS GLOBAL
+// =============================
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Methods", "GET, OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Content-Type, Range");
+  next();
+});
+
+// =============================
 // 📡 CONFIGURACIÓN DE CANALES
 // =============================
 const CHANNELS_PATH = path.join(process.cwd(), "channels.json");
@@ -52,7 +62,14 @@ for (const ch in channels) {
 async function checkLive(channel) {
   const url = channels[channel].live;
   try {
-    const response = await fetch(url, { headers: { Range: "bytes=0-200" }, timeout: 5000 });
+    const response = await fetch(url, {
+      headers: {
+        Range: "bytes=0-200",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "Referer": "https://streamingtv.masplay.x10.mx"
+      },
+      timeout: 5000
+    });
     const text = await response.text();
     const ok = response.ok && text.includes(".ts");
     channelStatus[channel].live = ok;
@@ -64,105 +81,98 @@ async function checkLive(channel) {
 }
 
 // =============================
-// 🌍 CORS
+// 🔁 VERIFICACIÓN PERIÓDICA
 // =============================
-app.use((req, res, next) => {
-  res.header("Access-Control-Allow-Origin", "*");
-  res.header("Access-Control-Allow-Methods", "GET,HEAD,OPTIONS");
-  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Range");
-  next();
-});
+setInterval(() => {
+  for (const ch in channels) {
+    checkLive(ch);
+  }
+}, CHECK_INTERVAL);
 
 // =============================
-// 🧰 PANEL ADMIN (protegido)
+// 🎬 ENDPOINT DE STREAMING
 // =============================
-app.use("/admin", express.static("admin"));
+app.get("/stream/:channel", async (req, res) => {
+  const channel = req.params.channel;
 
-app.get("/api/channels", (req, res) => res.json(channels));
+  if (!channels[channel]) {
+    return res.status(404).send("Canal no encontrado");
+  }
 
-app.post("/api/channels", (req, res) => {
-  channels = req.body;
-  fs.writeFileSync(CHANNELS_PATH, JSON.stringify(channels, null, 2));
-  res.json({ message: "Canales actualizados correctamente" });
-});
-
-// =============================
-// 🎛️ PROXY DE PLAYLIST
-// =============================
-app.get("/proxy/:channel/playlist.m3u8", async (req, res) => {
-  const { channel } = req.params;
-  const config = channels[channel];
-  if (!config) return res.status(404).send("Canal no encontrado");
-
-  // Verificar en tiempo real si el LIVE funciona
-  let isLive = await checkLive(channel);
-  const playlistUrl = isLive ? config.live : config.cloud;
+  const isLive = channelStatus[channel]?.live;
+  const url = isLive ? channels[channel].live : channels[channel].cloud;
 
   try {
-    const response = await fetch(playlistUrl);
-    let text = await response.text();
-
-    // Reescribir rutas .ts
-    text = text.replace(/^(?!#)(.*\.ts.*)$/gm, (line) => {
-      if (line.startsWith("http")) return line;
-      return `/proxy/${channel}/${line}`;
+    const response = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "Referer": "https://streamingtv.masplay.x10.mx"
+      }
     });
 
-    PLAYLIST_CACHE[channel] = text;
+    let text = await response.text();
 
-    res.header("Content-Type", "application/vnd.apple.mpegurl");
+    // Reescribir rutas absolutas para que los .ts pasen por el proxy
+    text = text.replace(/(https?:\/\/[^\s"']+)/g, match =>
+      `/proxy?url=${encodeURIComponent(match)}`
+    );
+
+    // Si hay rutas relativas, prepéndelas también al proxy
+    text = text.replace(/^(?!#)(.*\.ts)$/gm, match =>
+      `/proxy?url=${encodeURIComponent(new URL(match, url).href)}`
+    );
+
+    res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
     res.send(text);
+  } catch (error) {
+    res.status(500).send("Error al obtener el stream: " + error.message);
+  }
+});
+
+// =============================
+// 🚀 PROXY DIRECTO PARA TS Y M3U8
+// =============================
+app.get("/proxy", async (req, res) => {
+  const url = req.query.url;
+  if (!url) return res.status(400).send("Falta parámetro ?url=");
+
+  try {
+    const response = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "Referer": "https://streamingtv.masplay.x10.mx"
+      }
+    });
+
+    // Copiar encabezados relevantes
+    res.set("Content-Type", response.headers.get("content-type") || "application/octet-stream");
+
+    // Transmitir el contenido directamente
+    response.body.pipe(res);
   } catch (err) {
-    console.warn(`⚠️ Error en ${channel}: ${err.message}, usando cache`);
-    res.header("Content-Type", "application/vnd.apple.mpegurl");
-    res.send(PLAYLIST_CACHE[channel]);
+    res.status(500).send("Error al obtener proxy: " + err.message);
   }
 });
 
 // =============================
-// 🎞️ PROXY DE SEGMENTOS (TS)
+// 📄 ADMIN: GUARDAR CAMBIOS EN CANALES
 // =============================
-app.use("/proxy/:channel/", async (req, res, next) => {
-  const { channel } = req.params;
-  const config = channels[channel];
-  if (!config) return res.status(404).send("Canal no encontrado");
-
-  // Cada solicitud de segmento también verifica el estado actual
-  let isLive = channelStatus[channel].live;
-  if (!isLive) {
-    isLive = await checkLive(channel);
-  }
-
-  const baseUrl = isLive ? config.live : config.cloud;
-  const urlObj = new URL(baseUrl);
-  urlObj.pathname = urlObj.pathname.substring(0, urlObj.pathname.lastIndexOf("/") + 1);
-  const baseDir = urlObj.toString();
-
-  return createProxyMiddleware({
-    target: baseDir,
-    changeOrigin: true,
-    pathRewrite: { [`^/proxy/${channel}/`]: "" },
-    onProxyRes: (proxyRes, req, res) => {
-      res.setHeader("Access-Control-Allow-Origin", "*");
-      res.setHeader("Access-Control-Allow-Methods", "GET,HEAD,OPTIONS");
-      res.setHeader("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Range");
-      res.setHeader("Accept-Ranges", "bytes");
-    }
-  })(req, res, next);
+app.post("/admin/save", (req, res) => {
+  channels = req.body;
+  fs.writeFileSync(CHANNELS_PATH, JSON.stringify(channels, null, 2), "utf8");
+  res.json({ status: "ok" });
 });
 
 // =============================
-// 📊 ESTADO DE CANALES
+// 🧾 LISTAR CANALES
 // =============================
-app.get("/status/:channel", (req, res) => {
-  const { channel } = req.params;
-  if (!channels[channel]) return res.status(404).json({ error: "Canal no encontrado" });
-  res.json({ live: channelStatus[channel].live });
+app.get("/channels", (req, res) => {
+  res.json(channels);
 });
 
 // =============================
-// 🚀 INICIO DEL SERVIDOR
+// 🏁 INICIO DEL SERVIDOR
 // =============================
 app.listen(PORT, () => {
-  console.log(`✅ Proxy TV con conmutación en vivo activo en http://localhost:${PORT}`);
+  console.log(`Servidor proxy TV corriendo en puerto ${PORT}`);
 });
