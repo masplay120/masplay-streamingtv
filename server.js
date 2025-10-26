@@ -40,10 +40,12 @@ let channels = JSON.parse(fs.readFileSync(CHANNELS_PATH, "utf8"));
 const channelStatus = {};
 const PLAYLIST_CACHE = {};
 const CHECK_INTERVAL = 10000; // 10 segundos
+const usuariosConectados = {}; // 👈 Contador de usuarios por canal
 
 for (const ch in channels) {
   channelStatus[ch] = { live: false, lastCheck: 0 };
   PLAYLIST_CACHE[ch] = "#EXTM3U\n";
+  usuariosConectados[ch] = 0;
 }
 
 // =============================
@@ -94,7 +96,6 @@ app.get("/proxy/:channel/playlist.m3u8", async (req, res) => {
   const config = channels[channel];
   if (!config) return res.status(404).send("Canal no encontrado");
 
-  // Verificar en tiempo real si el LIVE funciona
   let isLive = await checkLive(channel);
   const playlistUrl = isLive ? config.live : config.cloud;
 
@@ -102,13 +103,18 @@ app.get("/proxy/:channel/playlist.m3u8", async (req, res) => {
     const response = await fetch(playlistUrl);
     let text = await response.text();
 
-    // Reescribir rutas .ts
     text = text.replace(/^(?!#)(.*\.ts.*)$/gm, (line) => {
       if (line.startsWith("http")) return line;
       return `/proxy/${channel}/${line}`;
     });
 
     PLAYLIST_CACHE[channel] = text;
+
+    // 👈 Contador de usuarios para playlist
+    usuariosConectados[channel]++;
+    res.on("finish", () => {
+      usuariosConectados[channel]--;
+    });
 
     res.header("Content-Type", "application/vnd.apple.mpegurl");
     res.send(text);
@@ -127,7 +133,6 @@ app.use("/proxy/:channel/", async (req, res, next) => {
   const config = channels[channel];
   if (!config) return res.status(404).send("Canal no encontrado");
 
-  // Cada solicitud de segmento también verifica el estado actual
   let isLive = channelStatus[channel].live;
   if (!isLive) {
     isLive = await checkLive(channel);
@@ -137,6 +142,12 @@ app.use("/proxy/:channel/", async (req, res, next) => {
   const urlObj = new URL(baseUrl);
   urlObj.pathname = urlObj.pathname.substring(0, urlObj.pathname.lastIndexOf("/") + 1);
   const baseDir = urlObj.toString();
+
+  // 👈 Contador de usuarios para segmentos
+  usuariosConectados[channel]++;
+  res.on("finish", () => {
+    usuariosConectados[channel]--;
+  });
 
   return createProxyMiddleware({
     target: baseDir,
@@ -152,12 +163,16 @@ app.use("/proxy/:channel/", async (req, res, next) => {
 });
 
 // =============================
-// 📊 ESTADO DE CANALES
+// 📊 ESTADO DE CANALES CON USUARIOS
 // =============================
 app.get("/status/:channel", (req, res) => {
   const { channel } = req.params;
   if (!channels[channel]) return res.status(404).json({ error: "Canal no encontrado" });
-  res.json({ live: channelStatus[channel].live });
+
+  res.json({
+    live: channelStatus[channel].live,
+    usuariosConectados: usuariosConectados[channel] || 0
+  });
 });
 
 // =============================
