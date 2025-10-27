@@ -11,7 +11,7 @@ const PORT = process.env.PORT || 8080;
 app.use(express.json());
 
 // =============================
-// 🔐 SEGURIDAD ADMIN PANEL
+// 🔐 Panel Admin (opcional)
 // =============================
 const ADMIN_USER = process.env.ADMIN_USER || "";
 const ADMIN_PASS = process.env.ADMIN_PASS || "";
@@ -19,45 +19,39 @@ const ADMIN_PASS = process.env.ADMIN_PASS || "";
 app.use("/admin", (req, res, next) => {
   const authHeader = req.headers.authorization || "";
   const [type, credentials] = authHeader.split(" ");
-
   if (type === "Basic" && credentials) {
     const [user, pass] = Buffer.from(credentials, "base64").toString().split(":");
-    if (user === ADMIN_USER && pass === ADMIN_PASS) {
-      return next();
-    }
+    if (user === ADMIN_USER && pass === ADMIN_PASS) return next();
   }
-
   res.set("WWW-Authenticate", 'Basic realm="Panel Admin"');
   res.status(401).send("Acceso denegado");
 });
 
 // =============================
-// 📡 CONFIGURACIÓN DE CANALES
+// 📺 Configuración de canales
 // =============================
 const CHANNELS_PATH = path.join(process.cwd(), "channels.json");
 let channels = JSON.parse(fs.readFileSync(CHANNELS_PATH, "utf8"));
 
+// Estado interno
 const channelStatus = {};
-const PLAYLIST_CACHE = {};
-const SEGMENT_CACHE = {}; // 👈 Nuevo: cache de segmentos
 const usuariosConectados = {};
-
+const PLAYLIST_CACHE = {};
 for (const ch in channels) {
   channelStatus[ch] = { live: false, lastCheck: 0 };
-  PLAYLIST_CACHE[ch] = "#EXTM3U\n";
   usuariosConectados[ch] = 0;
-  SEGMENT_CACHE[ch] = {}; // guardar pequeños ts
+  PLAYLIST_CACHE[ch] = "#EXTM3U\n";
 }
 
 // =============================
-// 🧠 FUNCIÓN DE TESTEO DE LIVE
+// 🧠 Verificar si el canal está en vivo
 // =============================
 async function checkLive(channel) {
   const url = channels[channel].live;
   try {
-    const response = await fetch(url, { headers: { Range: "bytes=0-200" }, timeout: 4000 });
-    const text = await response.text();
-    const ok = response.ok && text.includes(".ts");
+    const res = await fetch(url, { headers: { Range: "bytes=0-300" }, timeout: 5000 });
+    const text = await res.text();
+    const ok = res.ok && text.includes(".ts");
     channelStatus[channel].live = ok;
     return ok;
   } catch {
@@ -67,7 +61,7 @@ async function checkLive(channel) {
 }
 
 // =============================
-// 🌍 CORS
+// 🌍 CORS global
 // =============================
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
@@ -77,10 +71,8 @@ app.use((req, res, next) => {
 });
 
 // =============================
-// 🧰 PANEL ADMIN (protegido)
+// 🧰 API de canales (panel admin)
 // =============================
-app.use("/admin", express.static("admin"));
-
 app.get("/api/channels", (req, res) => res.json(channels));
 
 app.post("/api/channels", (req, res) => {
@@ -90,45 +82,13 @@ app.post("/api/channels", (req, res) => {
 });
 
 // =============================
-// 🧾 LOG DE CONEXIONES
-// =============================
-function registrarConexion(req, channel) {
-  const userAgent = req.headers["user-agent"] || "Desconocido";
-  const referer = req.headers["referer"] || "Directo";
-
-  let tipo = "PC";
-  if (/mobile/i.test(userAgent)) tipo = "Móvil";
-  if (/smart|hbbtv|netcast|tizen|webos/i.test(userAgent)) tipo = "TV";
-
-  const info = {
-    canal: channel,
-    tipo,
-    userAgent,
-    referer,
-    ip: req.headers["x-forwarded-for"] || req.connection.remoteAddress,
-    fecha: new Date().toISOString(),
-  };
-
-  const logPath = path.join(process.cwd(), "connections.log");
-  fs.appendFileSync(logPath, JSON.stringify(info) + "\n");
-}
-
-// =============================
-// 🎛️ PROXY DE PLAYLIST
+// 🎛️ Proxy para playlist (m3u8)
 // =============================
 app.get("/proxy/:channel/playlist.m3u8", async (req, res) => {
   const { channel } = req.params;
   const config = channels[channel];
   if (!config) return res.status(404).send("Canal no encontrado");
 
-  registrarConexion(req, channel);
-  usuariosConectados[channel]++;
-
-  res.on("finish", () => {
-    usuariosConectados[channel] = Math.max(0, usuariosConectados[channel] - 1);
-  });
-
-  // Detectar si está en vivo
   let isLive = await checkLive(channel);
   const playlistUrl = isLive ? config.live : config.cloud;
 
@@ -136,13 +96,20 @@ app.get("/proxy/:channel/playlist.m3u8", async (req, res) => {
     const response = await fetch(playlistUrl);
     let text = await response.text();
 
-    // Reescribir rutas .ts para proxy
+    // Corrige las URLs de los segmentos
     text = text.replace(/^(?!#)(.*\.ts.*)$/gm, (line) => {
       if (line.startsWith("http")) return line;
       return `/proxy/${channel}/${line}`;
     });
 
+    // Guardar en caché (para cortes)
     PLAYLIST_CACHE[channel] = text;
+
+    // Contar usuarios conectados
+    usuariosConectados[channel]++;
+    res.on("close", () => {
+      usuariosConectados[channel]--;
+    });
 
     res.header("Content-Type", "application/vnd.apple.mpegurl");
     res.send(text);
@@ -154,83 +121,52 @@ app.get("/proxy/:channel/playlist.m3u8", async (req, res) => {
 });
 
 // =============================
-// 🎞️ PROXY DE SEGMENTOS (TS) CON CACHE
+// 🎞️ Proxy para segmentos .ts
 // =============================
-app.get("/proxy/:channel/:segment", async (req, res, next) => {
-  const { channel, segment } = req.params;
+app.use("/proxy/:channel/", async (req, res, next) => {
+  const { channel } = req.params;
   const config = channels[channel];
   if (!config) return res.status(404).send("Canal no encontrado");
 
-  registrarConexion(req, channel);
-  usuariosConectados[channel]++;
+  let isLive = channelStatus[channel].live;
+  if (!isLive) isLive = await checkLive(channel);
 
-  res.on("finish", () => {
-    usuariosConectados[channel] = Math.max(0, usuariosConectados[channel] - 1);
-  });
-
-  let isLive = channelStatus[channel].live || (await checkLive(channel));
   const baseUrl = isLive ? config.live : config.cloud;
   const urlObj = new URL(baseUrl);
   urlObj.pathname = urlObj.pathname.substring(0, urlObj.pathname.lastIndexOf("/") + 1);
-  const segmentUrl = `${urlObj}${segment}`;
+  const baseDir = urlObj.toString();
 
-  // Si existe en cache, servirlo rápido
-  if (SEGMENT_CACHE[channel][segment]) {
-    res.setHeader("Content-Type", "video/MP2T");
-    return res.end(SEGMENT_CACHE[channel][segment]);
-  }
+  usuariosConectados[channel]++;
+  res.on("close", () => {
+    usuariosConectados[channel]--;
+  });
 
-  try {
-    const response = await fetch(segmentUrl);
-    if (!response.ok) throw new Error("No se pudo obtener segmento");
-    const buffer = await response.arrayBuffer();
-
-    // Guardar una copia en cache (máximo 5 segmentos)
-    const keys = Object.keys(SEGMENT_CACHE[channel]);
-    if (keys.length > 5) delete SEGMENT_CACHE[channel][keys[0]];
-    SEGMENT_CACHE[channel][segment] = Buffer.from(buffer);
-
-    res.setHeader("Content-Type", "video/MP2T");
-    res.end(Buffer.from(buffer));
-  } catch (err) {
-    console.warn(`⚠️ Error segmento ${segment}: ${err.message}`);
-    if (SEGMENT_CACHE[channel][segment]) {
-      res.setHeader("Content-Type", "video/MP2T");
-      res.end(SEGMENT_CACHE[channel][segment]);
-    } else {
-      res.status(404).end();
+  return createProxyMiddleware({
+    target: baseDir,
+    changeOrigin: true,
+    pathRewrite: { [`^/proxy/${channel}/`]: "" },
+    onProxyRes: (proxyRes, req, res) => {
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Accept-Ranges", "bytes");
     }
-  }
+  })(req, res, next);
 });
 
 // =============================
-// 📊 ESTADO DE CANALES
+// 📊 Estado de cada canal
 // =============================
 app.get("/status/:channel", (req, res) => {
   const { channel } = req.params;
   if (!channels[channel]) return res.status(404).json({ error: "Canal no encontrado" });
   res.json({
     live: channelStatus[channel].live,
-    usuariosConectados: usuariosConectados[channel] || 0,
+    usuariosConectados: usuariosConectados[channel] || 0
   });
 });
 
 // =============================
-// 🧾 LOG VIEWER (opcional)
-// =============================
-app.get("/logs", (req, res) => {
-  try {
-    const data = fs.readFileSync(path.join(process.cwd(), "connections.log"), "utf8");
-    const logs = data.trim().split("\n").map((line) => JSON.parse(line));
-    res.json(logs);
-  } catch {
-    res.json([]);
-  }
-});
-
-// =============================
-// 🚀 INICIO DEL SERVIDOR
+// 🚀 Iniciar servidor
 // =============================
 app.listen(PORT, () => {
-  console.log(`✅ Proxy TV activo en http://localhost:${PORT}`);
+  console.log(`✅ Proxy funcionando en http://localhost:${PORT}`);
 });
