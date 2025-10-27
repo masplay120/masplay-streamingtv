@@ -97,7 +97,7 @@ async function checkLive(channel) {
   if (!url) return false;
 
   try {
-    const response = await fetch(url, { headers: { Range: "bytes=0-200" }, timeout: 5000 });
+    const response = await fetch(url, { headers: { Range: "bytes=0-200" }, timeout: 1000 });
     const text = await response.text();
     const ok = response.ok && text.includes(".ts");
     channelStatus[channel].live = ok;
@@ -140,7 +140,7 @@ app.post("/api/channels", (req, res) => {
 // =============================
 // 🎛️ PROXY DE PLAYLIST
 // =============================
-const CACHE_TTL = 15000; // 15s
+const CACHE_TTL = 10000; // 10s
 
 app.get("/proxy/:channel/playlist.m3u8", async (req, res) => {
   const { channel } = req.params;
