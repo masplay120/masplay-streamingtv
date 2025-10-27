@@ -48,19 +48,35 @@ for (const ch in channels) {
 }
 
 // =============================
-// 🧠 FUNCIÓN DE TESTEO DE LIVE
+// 🧠 FUNCIÓN DE TESTEO DE LIVE CON FALLBACK
 // =============================
 async function checkLive(channel) {
   const url = channels[channel].live;
   try {
-    const response = await fetch(url, { headers: { Range: "bytes=0-200" }, timeout: 5000 });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3000);
+
+    const response = await fetch(url, {
+      headers: { Range: "bytes=0-200" },
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
+
     const text = await response.text();
     const ok = response.ok && text.includes(".ts");
+
     channelStatus[channel].live = ok;
     channelStatus[channel].lastCheck = Date.now();
+
+    if (!ok) {
+      PLAYLIST_CACHE[channel] = { data: "#EXTM3U\n", timestamp: 0 };
+    }
+
     return ok;
   } catch {
     channelStatus[channel].live = false;
+    channelStatus[channel].lastCheck = Date.now();
+    PLAYLIST_CACHE[channel] = { data: "#EXTM3U\n", timestamp: 0 };
     return false;
   }
 }
@@ -76,9 +92,8 @@ app.use((req, res, next) => {
 });
 
 // =============================
-// 👥 GESTIÓN DE CONEXIONES ACTIVAS
+// 👥 CONEXIONES ACTIVAS
 // =============================
-
 const conexionesActivas = {}; // { canal: { "ip|ua": { dispositivo, ultimaVez } } }
 const TTL = 30000; // 30 segundos
 
@@ -151,6 +166,8 @@ app.get("/proxy/:channel/playlist.m3u8", async (req, res) => {
     (now - channelStatus[channel].lastCheck > CHECK_INTERVAL && (await checkLive(channel)));
 
   const playlistUrl = isLive ? config.live : config.cloud;
+
+  console.log(`🔄 Canal ${channel}: live=${channelStatus[channel].live} → ${isLive ? "LIVE" : "CLOUD"}`);
 
   try {
     const response = await fetch(playlistUrl);
