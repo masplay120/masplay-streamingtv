@@ -19,12 +19,10 @@ const ADMIN_PASS = process.env.ADMIN_PASS || "";
 app.use("/admin", (req, res, next) => {
   const authHeader = req.headers.authorization || "";
   const [type, credentials] = authHeader.split(" ");
-
   if (type === "Basic" && credentials) {
     const [user, pass] = Buffer.from(credentials, "base64").toString().split(":");
     if (user === ADMIN_USER && pass === ADMIN_PASS) return next();
   }
-
   res.set("WWW-Authenticate", 'Basic realm="Panel Admin"');
   res.status(401).send("Acceso denegado");
 });
@@ -37,58 +35,14 @@ let channels = JSON.parse(fs.readFileSync(CHANNELS_PATH, "utf8"));
 
 const channelStatus = {};
 const PLAYLIST_CACHE = {};
-const CACHE_TTL = 15000; // 15 segundos
-const CHECK_INTERVAL = 10000;
-
-for (const ch in channels) {
-  channelStatus[ch] = { live: false, lastCheck: 0 };
-  PLAYLIST_CACHE[ch] = { data: "#EXTM3U\n", timestamp: 0, baseDir: "" };
-}
-
-// =============================
-// 🧠 FUNCIÓN DE TESTEO DE LIVE
-// =============================
-async function checkLive(channel) {
-  const url = channels[channel].live;
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 3000);
-
-    const response = await fetch(url, {
-      headers: { Range: "bytes=0-200" },
-      signal: controller.signal
-    });
-    clearTimeout(timeout);
-
-    const text = await response.text();
-    const ok = response.ok && text.includes(".ts");
-
-    channelStatus[channel].live = ok;
-    channelStatus[channel].lastCheck = Date.now();
-
-    return ok;
-  } catch {
-    channelStatus[channel].live = false;
-    channelStatus[channel].lastCheck = Date.now();
-    return false;
-  }
-}
-
-// =============================
-// 🌍 CORS
-// =============================
-app.use((req, res, next) => {
-  res.header("Access-Control-Allow-Origin", "*");
-  res.header("Access-Control-Allow-Methods", "GET,HEAD,OPTIONS");
-  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Range");
-  next();
-});
+const CACHE_TTL = 15000; // 15s para usar cache
+const CHECK_INTERVAL = 5000; // 5s
 
 // =============================
 // 👥 CONEXIONES ACTIVAS
 // =============================
-const conexionesActivas = {};
-const TTL = 30000;
+const conexionesActivas = {}; // { canal: { "ip|ua": { dispositivo, ultimaVez } } }
+const TTL = 30000; // 30s de timeout por usuario
 
 function detectarDispositivo(userAgent) {
   userAgent = userAgent.toLowerCase();
@@ -111,7 +65,9 @@ function limpiarConexiones() {
   const ahora = Date.now();
   for (const canal in conexionesActivas) {
     for (const key in conexionesActivas[canal]) {
-      if (ahora - conexionesActivas[canal][key].ultimaVez > TTL) delete conexionesActivas[canal][key];
+      if (ahora - conexionesActivas[canal][key].ultimaVez > TTL) {
+        delete conexionesActivas[canal][key];
+      }
     }
   }
 }
@@ -129,10 +85,40 @@ function obtenerEstadoCanal(canal) {
 }
 
 // =============================
+// 🧠 FUNCION CHECK LIVE
+// =============================
+async function checkLive(channel) {
+  const url = channels[channel].live;
+  try {
+    const response = await fetch(url, { headers: { Range: "bytes=0-200" }, timeout: 5000 });
+    const text = await response.text();
+    const ok = response.ok && text.includes(".ts");
+    channelStatus[channel].live = ok;
+    channelStatus[channel].lastCheck = Date.now();
+    return ok;
+  } catch {
+    channelStatus[channel].live = false;
+    return false;
+  }
+}
+
+// =============================
+// 🌍 CORS
+// =============================
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Methods", "GET,HEAD,OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Range");
+  next();
+});
+
+// =============================
 // 🧰 PANEL ADMIN
 // =============================
 app.use("/admin", express.static("admin"));
+
 app.get("/api/channels", (req, res) => res.json(channels));
+
 app.post("/api/channels", (req, res) => {
   channels = req.body;
   fs.writeFileSync(CHANNELS_PATH, JSON.stringify(channels, null, 2));
@@ -142,6 +128,10 @@ app.post("/api/channels", (req, res) => {
 // =============================
 // 🎛️ PROXY DE PLAYLIST
 // =============================
+for (const ch in channels) {
+  PLAYLIST_CACHE[ch] = { data: "#EXTM3U\n", timestamp: 0 };
+}
+
 app.get("/proxy/:channel/playlist.m3u8", async (req, res) => {
   const { channel } = req.params;
   const config = channels[channel];
@@ -149,28 +139,21 @@ app.get("/proxy/:channel/playlist.m3u8", async (req, res) => {
 
   registrarConexion(channel, req);
 
-  const now = Date.now();
-  let isLive = channelStatus[channel].live;
-  if (!isLive || now - channelStatus[channel].lastCheck > CHECK_INTERVAL) {
-    isLive = await checkLive(channel);
-  }
-
+  // Siempre verificar el estado live
+  const isLive = await checkLive(channel);
   const playlistUrl = isLive ? config.live : config.cloud;
 
   try {
     const response = await fetch(playlistUrl);
     let text = await response.text();
 
-    // Base para resolver .ts
-    const baseUrlObj = new URL(playlistUrl);
-    const baseDir = baseUrlObj.toString().substring(0, baseUrlObj.toString().lastIndexOf("/") + 1);
-
-    // Reescribir segmentos para que apunten al proxy
+    // 🔹 Forzar playlist nueva con query string para evitar TS inválidos
     text = text.replace(/^(?!#)(.*\.ts.*)$/gm, (line) => {
-      return `/proxy/${channel}/${line}`;
+      if (line.startsWith("http")) return line + `?v=${Date.now()}`;
+      return `/proxy/${channel}/${line}?v=${Date.now()}`;
     });
 
-    PLAYLIST_CACHE[channel] = { data: text, timestamp: Date.now(), baseDir };
+    PLAYLIST_CACHE[channel] = { data: text, timestamp: Date.now() };
     res.header("Content-Type", "application/vnd.apple.mpegurl");
     res.send(text);
   } catch (err) {
