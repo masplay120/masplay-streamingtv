@@ -33,10 +33,13 @@ app.use("/admin", (req, res, next) => {
 const CHANNELS_PATH = path.join(process.cwd(), "channels.json");
 let channels = JSON.parse(fs.readFileSync(CHANNELS_PATH, "utf8"));
 
+// Inicializa objetos por canal
 const channelStatus = {};
 const PLAYLIST_CACHE = {};
-const CACHE_TTL = 15000; // 15s para usar cache
-const CHECK_INTERVAL = 5000; // 5s
+for (const ch in channels) {
+  channelStatus[ch] = { live: false, lastCheck: 0 };
+  PLAYLIST_CACHE[ch] = { data: "#EXTM3U\n", timestamp: 0 };
+}
 
 // =============================
 // 👥 CONEXIONES ACTIVAS
@@ -88,7 +91,11 @@ function obtenerEstadoCanal(canal) {
 // 🧠 FUNCION CHECK LIVE
 // =============================
 async function checkLive(channel) {
-  const url = channels[channel].live;
+  // Inicializar channelStatus si no existe
+  if (!channelStatus[channel]) channelStatus[channel] = { live: false, lastCheck: 0 };
+  const url = channels[channel]?.live;
+  if (!url) return false;
+
   try {
     const response = await fetch(url, { headers: { Range: "bytes=0-200" }, timeout: 5000 });
     const text = await response.text();
@@ -122,15 +129,18 @@ app.get("/api/channels", (req, res) => res.json(channels));
 app.post("/api/channels", (req, res) => {
   channels = req.body;
   fs.writeFileSync(CHANNELS_PATH, JSON.stringify(channels, null, 2));
+  // Inicializa objetos nuevos si hay nuevos canales
+  for (const ch in channels) {
+    if (!channelStatus[ch]) channelStatus[ch] = { live: false, lastCheck: 0 };
+    if (!PLAYLIST_CACHE[ch]) PLAYLIST_CACHE[ch] = { data: "#EXTM3U\n", timestamp: 0 };
+  }
   res.json({ message: "Canales actualizados correctamente" });
 });
 
 // =============================
 // 🎛️ PROXY DE PLAYLIST
 // =============================
-for (const ch in channels) {
-  PLAYLIST_CACHE[ch] = { data: "#EXTM3U\n", timestamp: 0 };
-}
+const CACHE_TTL = 15000; // 15s
 
 app.get("/proxy/:channel/playlist.m3u8", async (req, res) => {
   const { channel } = req.params;
@@ -139,7 +149,7 @@ app.get("/proxy/:channel/playlist.m3u8", async (req, res) => {
 
   registrarConexion(channel, req);
 
-  // Siempre verificar el estado live
+  // Verifica live cada vez
   const isLive = await checkLive(channel);
   const playlistUrl = isLive ? config.live : config.cloud;
 
@@ -147,7 +157,7 @@ app.get("/proxy/:channel/playlist.m3u8", async (req, res) => {
     const response = await fetch(playlistUrl);
     let text = await response.text();
 
-    // 🔹 Forzar playlist nueva con query string para evitar TS inválidos
+    // Forzar playlist nueva agregando query string
     text = text.replace(/^(?!#)(.*\.ts.*)$/gm, (line) => {
       if (line.startsWith("http")) return line + `?v=${Date.now()}`;
       return `/proxy/${channel}/${line}?v=${Date.now()}`;
@@ -178,7 +188,7 @@ app.use("/proxy/:channel/", async (req, res, next) => {
 
   registrarConexion(channel, req);
 
-  let isLive = channelStatus[channel].live;
+  let isLive = channelStatus[channel]?.live || false;
   if (!isLive) isLive = await checkLive(channel);
 
   const baseUrl = isLive ? config.live : config.cloud;
@@ -208,7 +218,7 @@ app.get("/status/:channel", (req, res) => {
 
   const estado = obtenerEstadoCanal(channel);
   res.json({
-    live: channelStatus[channel].live,
+    live: channelStatus[channel]?.live || false,
     usuariosConectados: estado.total,
     dispositivos: estado.porDispositivo
   });
