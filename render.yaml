@@ -2,7 +2,6 @@ services:
   - type: web
     name: proxy-tv
     env: node
-    nodeVersion: "18" # Asegura Node.js 18
     buildCommand: ""
     startCommand: "npm start"
     plan: free
