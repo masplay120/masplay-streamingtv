@@ -22,9 +22,7 @@ app.use("/admin", (req, res, next) => {
 
   if (type === "Basic" && credentials) {
     const [user, pass] = Buffer.from(credentials, "base64").toString().split(":");
-    if (user === ADMIN_USER && pass === ADMIN_PASS) {
-      return next();
-    }
+    if (user === ADMIN_USER && pass === ADMIN_PASS) return next();
   }
 
   res.set("WWW-Authenticate", 'Basic realm="Panel Admin"');
@@ -44,11 +42,11 @@ const CHECK_INTERVAL = 10000;
 
 for (const ch in channels) {
   channelStatus[ch] = { live: false, lastCheck: 0 };
-  PLAYLIST_CACHE[ch] = { data: "#EXTM3U\n", timestamp: 0 };
+  PLAYLIST_CACHE[ch] = { data: "#EXTM3U\n", timestamp: 0, baseDir: "" };
 }
 
 // =============================
-// 🧠 FUNCIÓN DE TESTEO DE LIVE CON FALLBACK
+// 🧠 FUNCIÓN DE TESTEO DE LIVE
 // =============================
 async function checkLive(channel) {
   const url = channels[channel].live;
@@ -68,15 +66,10 @@ async function checkLive(channel) {
     channelStatus[channel].live = ok;
     channelStatus[channel].lastCheck = Date.now();
 
-    if (!ok) {
-      PLAYLIST_CACHE[channel] = { data: "#EXTM3U\n", timestamp: 0 };
-    }
-
     return ok;
   } catch {
     channelStatus[channel].live = false;
     channelStatus[channel].lastCheck = Date.now();
-    PLAYLIST_CACHE[channel] = { data: "#EXTM3U\n", timestamp: 0 };
     return false;
   }
 }
@@ -94,8 +87,8 @@ app.use((req, res, next) => {
 // =============================
 // 👥 CONEXIONES ACTIVAS
 // =============================
-const conexionesActivas = {}; // { canal: { "ip|ua": { dispositivo, ultimaVez } } }
-const TTL = 30000; // 30 segundos
+const conexionesActivas = {};
+const TTL = 30000;
 
 function detectarDispositivo(userAgent) {
   userAgent = userAgent.toLowerCase();
@@ -118,9 +111,7 @@ function limpiarConexiones() {
   const ahora = Date.now();
   for (const canal in conexionesActivas) {
     for (const key in conexionesActivas[canal]) {
-      if (ahora - conexionesActivas[canal][key].ultimaVez > TTL) {
-        delete conexionesActivas[canal][key];
-      }
+      if (ahora - conexionesActivas[canal][key].ultimaVez > TTL) delete conexionesActivas[canal][key];
     }
   }
 }
@@ -141,9 +132,7 @@ function obtenerEstadoCanal(canal) {
 // 🧰 PANEL ADMIN
 // =============================
 app.use("/admin", express.static("admin"));
-
 app.get("/api/channels", (req, res) => res.json(channels));
-
 app.post("/api/channels", (req, res) => {
   channels = req.body;
   fs.writeFileSync(CHANNELS_PATH, JSON.stringify(channels, null, 2));
@@ -161,24 +150,27 @@ app.get("/proxy/:channel/playlist.m3u8", async (req, res) => {
   registrarConexion(channel, req);
 
   const now = Date.now();
-  let isLive =
-    channelStatus[channel].live ||
-    (now - channelStatus[channel].lastCheck > CHECK_INTERVAL && (await checkLive(channel)));
+  let isLive = channelStatus[channel].live;
+  if (!isLive || now - channelStatus[channel].lastCheck > CHECK_INTERVAL) {
+    isLive = await checkLive(channel);
+  }
 
   const playlistUrl = isLive ? config.live : config.cloud;
-
-  console.log(`🔄 Canal ${channel}: live=${channelStatus[channel].live} → ${isLive ? "LIVE" : "CLOUD"}`);
 
   try {
     const response = await fetch(playlistUrl);
     let text = await response.text();
 
+    // Base para resolver .ts
+    const baseUrlObj = new URL(playlistUrl);
+    const baseDir = baseUrlObj.toString().substring(0, baseUrlObj.toString().lastIndexOf("/") + 1);
+
+    // Reescribir segmentos para que apunten al proxy
     text = text.replace(/^(?!#)(.*\.ts.*)$/gm, (line) => {
-      if (line.startsWith("http")) return line;
       return `/proxy/${channel}/${line}`;
     });
 
-    PLAYLIST_CACHE[channel] = { data: text, timestamp: Date.now() };
+    PLAYLIST_CACHE[channel] = { data: text, timestamp: Date.now(), baseDir };
     res.header("Content-Type", "application/vnd.apple.mpegurl");
     res.send(text);
   } catch (err) {
