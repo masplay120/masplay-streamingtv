@@ -186,8 +186,10 @@ app.get("/proxy/:channel/playlist.m3u8", async (req, res) => {
 });
 
 // =============================
-// 🎞️ PROXY DE SEGMENTOS TS CON BUFFER
+// 🎞️ PROXY DE SEGMENTOS TS CON BUFFER Y PRELOAD
 // =============================
+const PRELOAD_SEGMENTS = 3;
+
 app.get("/proxy/:channel/:segment", async (req, res) => {
   const { channel, segment } = req.params;
   const config = channels[channel];
@@ -201,18 +203,21 @@ app.get("/proxy/:channel/:segment", async (req, res) => {
   const baseUrl = isLive ? config.live : config.cloud;
   const urlObj = new URL(baseUrl);
   urlObj.pathname = urlObj.pathname.substring(0, urlObj.pathname.lastIndexOf("/") + 1);
-  const segmentUrl = `${urlObj.toString()}${segment}`;
+
+  // Servir desde cache si existe
+  if (SEGMENT_CACHE[channel][segment]) {
+    const cached = SEGMENT_CACHE[channel][segment];
+    res.setHeader("Content-Type", "video/mp2t");
+    res.setHeader("Content-Length", cached.data.length);
+    res.setHeader("Accept-Ranges", "bytes");
+    res.send(cached.data);
+    // Preload siguiente segmentos
+    preloadSegments(channel, urlObj.toString(), segment);
+    return;
+  }
 
   try {
-    // Revisar cache
-    if (SEGMENT_CACHE[channel][segment]) {
-      const cached = SEGMENT_CACHE[channel][segment];
-      res.setHeader("Content-Type", "video/mp2t");
-      res.setHeader("Content-Length", cached.data.length);
-      res.setHeader("Accept-Ranges", "bytes");
-      return res.send(cached.data);
-    }
-
+    const segmentUrl = `${urlObj.toString()}${segment}`;
     const response = await fetch(segmentUrl, { headers: { Range: req.headers.range || "" } });
     if (!response.ok) return res.status(response.status).end();
 
@@ -223,11 +228,35 @@ app.get("/proxy/:channel/:segment", async (req, res) => {
     res.setHeader("Content-Length", buffer.length);
     res.setHeader("Accept-Ranges", "bytes");
     res.send(buffer);
+
+    // Preload siguiente segmentos
+    preloadSegments(channel, urlObj.toString(), segment);
   } catch (err) {
     console.error("❌ Error proxy TS:", err.message);
     res.status(500).send("Error al retransmitir segmento");
   }
 });
+
+// =============================
+// Función para preload de próximos segmentos
+// =============================
+async function preloadSegments(channel, baseDir, currentSegment) {
+  const match = currentSegment.match(/(\d+)\.ts$/);
+  if (!match) return;
+  let index = parseInt(match[1]);
+  for (let i = 1; i <= PRELOAD_SEGMENTS; i++) {
+    const nextIndex = index + i;
+    const nextSegment = currentSegment.replace(/\d+\.ts$/, `${nextIndex}.ts`);
+    if (SEGMENT_CACHE[channel][nextSegment]) continue;
+    const url = `${baseDir}${nextSegment}`;
+    fetch(url)
+      .then(res => res.arrayBuffer())
+      .then(buffer => {
+        SEGMENT_CACHE[channel][nextSegment] = { data: Buffer.from(buffer), timestamp: Date.now() };
+      })
+      .catch(err => console.warn(`❌ Preload segmento ${nextSegment} error: ${err.message}`));
+  }
+}
 
 // =============================
 // 📊 ESTADO DEL CANAL
